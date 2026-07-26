@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::{compile_to_llvm, render_diagnostics, toolchain};
+use crate::{compile_to_llvm_for_target, render_diagnostics, toolchain};
 
 pub fn run(args: impl IntoIterator<Item = OsString>) -> ExitCode {
     let args: Vec<OsString> = args.into_iter().collect();
@@ -37,14 +37,28 @@ fn build(path: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let llvm_ir = match compile_to_llvm(&source) {
+    let host_target = match toolchain::HostTarget::detect() {
+        Ok(target) => target,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let environment = match toolchain::BuildEnvironment::discover(host_target) {
+        Ok(environment) => environment,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let llvm_ir = match compile_to_llvm_for_target(&source, environment.llvm_target_triple()) {
         Ok(llvm_ir) => llvm_ir,
         Err(diagnostics) => {
             eprintln!("{}", render_diagnostics(path, &source, &diagnostics));
             return ExitCode::FAILURE;
         }
     };
-    match toolchain::build(path, &llvm_ir) {
+    match toolchain::build(path, &llvm_ir, &environment) {
         Ok(artifacts) => {
             println!("Built: {}", display_path(&artifacts.executable).display());
             println!("LLVM IR: {}", display_path(&artifacts.llvm_ir).display());
@@ -52,6 +66,11 @@ fn build(path: &Path) -> ExitCode {
                 "LLVM bitcode: {}",
                 display_path(&artifacts.llvm_bitcode).display()
             );
+            println!("Host target: {}", environment.target());
+            println!("LLVM target: {}", environment.llvm_target_triple());
+            println!("C compiler: {}", environment.clang().display());
+            println!("Linker: {}", environment.linker().display());
+            println!("LLVM validation: {}", artifacts.llvm_validation);
             println!("Size: {} bytes", artifacts.size);
             ExitCode::SUCCESS
         }

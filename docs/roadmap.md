@@ -14,4 +14,6 @@ Each milestone should remain a narrow, executable vertical slice.
 
 Milestone 1 is complete. The headless software framebuffer is infrastructure
 for milestone 2, but milestone 2 still requires an actual presentation window;
-the current slice deliberately stops at deterministic PPM output.
+the current slice deliberately stops at deterministic PPM output. Host-native
+compiler/runtime portability is now proven on Linux x86-64 and macOS ARM64, but
+cross-compilation and native window presentation remain deferred.

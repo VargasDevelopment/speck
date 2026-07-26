@@ -20,21 +20,29 @@ with CRuMB.
 
 ## Quick start
 
-The current slice requires Rust/Cargo, Clang, LLVM command-line tools, and LLD:
+The current slice supports native builds on Linux x86-64 and macOS ARM64. It
+requires Rust/Cargo and Clang. Linux also requires LLD. A standalone `llvm-as`
+is optional because Clang can validate and compile textual LLVM IR directly.
 
 ```sh
-cargo test
+cargo test --all-targets
 cargo run -- build examples/crumb_bum.spk
 ./build/crumb_bum
 
 # Infrastructure-only framebuffer verification
 cargo run -- build examples/framebuffer_rect.spk
 ./build/framebuffer_rect
+
+# macOS native-binary inspection
+file build/framebuffer_rect
+otool -L build/framebuffer_rect
 ```
 
-The build command writes inspectable LLVM IR to `build/crumb_bum.ll`, validates
-it with `llvm-as`, compiles it with Clang, and links it with `runtime/crumb`.
-It reports the executable's exact byte size when complete.
+The build command writes host-tagged, inspectable LLVM IR to
+`build/crumb_bum.ll`, validates it with a compatible `llvm-as` when available
+or with Clang otherwise, compiles it with Clang, and links it with
+`runtime/crumb`. It reports the detected host, tools, validation path, and
+executable byte size when complete.
 
 The framebuffer example writes the final headless frame to `build/frame.ppm`.
 It verifies CRuMB infrastructure and is not the contest game.
@@ -50,8 +58,8 @@ language or a finished tiny-game platform. There is no heap, garbage collector,
 on-screen presentation, input, audio, arrays, modules, or asset system. Graphics
 are currently limited to clearing the software framebuffer and drawing clipped
 filled rectangles. Global initializers are literal constants, numeric types do
-not convert implicitly, and the current Linux executable uses the host's
-dynamic C library.
+not convert implicitly, and native executables use the host's dynamic C library.
+Native macOS window presentation is intentionally deferred.
 
 See [the language reference](docs/language.md),
 [architecture](docs/architecture.md), [byte budget](docs/byte-budget.md), and
