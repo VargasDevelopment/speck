@@ -196,6 +196,7 @@ pub struct BuildArtifacts {
 enum Presenter {
     Ppm,
     DevelopmentStream,
+    Cocoa,
 }
 
 impl Presenter {
@@ -203,6 +204,7 @@ impl Presenter {
         match self {
             Self::Ppm => "ppm",
             Self::DevelopmentStream => "stream",
+            Self::Cocoa => "cocoa",
         }
     }
 
@@ -210,6 +212,48 @@ impl Presenter {
         match self {
             Self::Ppm => "present_ppm.c",
             Self::DevelopmentStream => "present_stream.c",
+            Self::Cocoa => "present_cocoa.m",
+        }
+    }
+
+    const fn output_suffix(self) -> &'static str {
+        match self {
+            Self::Ppm => "",
+            Self::DevelopmentStream => "_dev",
+            Self::Cocoa => "_native",
+        }
+    }
+
+    const fn compile_definitions(self) -> &'static [&'static str] {
+        match self {
+            Self::Ppm => &[],
+            Self::DevelopmentStream => &["-DCRUMB_DEVELOPMENT=1", "-DCRUMB_PACED=1"],
+            Self::Cocoa => &["-DCRUMB_COCOA=1", "-DCRUMB_PACED=1"],
+        }
+    }
+
+    const fn source_compile_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Ppm | Self::DevelopmentStream => &[],
+            Self::Cocoa => &["-x", "objective-c"],
+        }
+    }
+
+    const fn link_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Ppm | Self::DevelopmentStream => &[],
+            Self::Cocoa => &["-framework", "AppKit", "-framework", "CoreGraphics"],
+        }
+    }
+
+    fn native_for_target(target: HostTarget) -> Result<Self, String> {
+        match target {
+            HostTarget::MacOsArm64 => Ok(Self::Cocoa),
+            HostTarget::LinuxX86_64 => Err(format!(
+                "native Cocoa presentation requires macOS ARM64; detected {target}. Use `speck \
+                 build` for deterministic PPM output or `speck dev` for browser presentation on \
+                 this host"
+            )),
         }
     }
 }
@@ -235,6 +279,15 @@ pub fn build_for_development(
     )
 }
 
+pub fn build_for_native(
+    source_path: &Path,
+    llvm_ir: &str,
+    environment: &BuildEnvironment,
+) -> Result<BuildArtifacts, String> {
+    let presenter = Presenter::native_for_target(environment.target())?;
+    build_with_presenter(source_path, llvm_ir, environment, presenter)
+}
+
 fn build_with_presenter(
     source_path: &Path,
     llvm_ir: &str,
@@ -242,10 +295,7 @@ fn build_with_presenter(
     presenter: Presenter,
 ) -> Result<BuildArtifacts, String> {
     let artifact_name = artifact_name(source_path)?;
-    let output_name = match presenter {
-        Presenter::Ppm => artifact_name,
-        Presenter::DevelopmentStream => format!("{artifact_name}_dev"),
-    };
+    let output_name = format!("{artifact_name}{}", presenter.output_suffix());
     let build_dir = env::current_dir()
         .map_err(|error| format!("could not find current directory: {error}"))?
         .join("build");
@@ -265,7 +315,13 @@ fn build_with_presenter(
     let llvm_validation =
         validate_and_compile_ir(environment, &llvm_path, &bitcode_path, &object_path)?;
     let crumb_objects = compile_runtime(environment, &build_dir, presenter)?;
-    link_executable(environment, &object_path, &crumb_objects, &executable_path)?;
+    link_executable(
+        environment,
+        &object_path,
+        &crumb_objects,
+        &executable_path,
+        presenter,
+    )?;
 
     let size = fs::metadata(&executable_path)
         .map_err(|error| {
@@ -440,7 +496,10 @@ fn compile_runtime(
 
     for source_name in sources {
         let source = crumb_dir.join(source_name);
-        let object_stem = source_name.trim_end_matches(".c").replace(['/', '\\'], "_");
+        let object_stem = source_name
+            .trim_end_matches(".c")
+            .trim_end_matches(".m")
+            .replace(['/', '\\'], "_");
         let object = build_dir.join(format!(
             "crumb_{}_{object_stem}.{}",
             presenter.name(),
@@ -460,8 +519,9 @@ fn compile_runtime(
                 .iter()
                 .map(OsString::from),
         );
-        if presenter == Presenter::DevelopmentStream {
-            args.push(OsString::from("-DCRUMB_DEVELOPMENT=1"));
+        args.extend(presenter.compile_definitions().iter().map(OsString::from));
+        if source_name == presenter.source() {
+            args.extend(presenter.source_compile_args().iter().map(OsString::from));
         }
         args.extend([
             OsString::from("-c"),
@@ -480,6 +540,7 @@ fn link_executable(
     game_object: &Path,
     runtime_objects: &[PathBuf],
     executable: &Path,
+    presenter: Presenter,
 ) -> Result<(), String> {
     let mut args = environment.target_args();
     args.extend(environment.target.link_args().iter().map(OsString::from));
@@ -489,6 +550,7 @@ fn link_executable(
             .iter()
             .map(|object| object.as_os_str().to_owned()),
     );
+    args.extend(presenter.link_args().iter().map(OsString::from));
     args.push(OsString::from("-o"));
     args.push(executable.as_os_str().to_owned());
     run(&environment.clang, args)
@@ -729,5 +791,39 @@ mod tests {
         assert_eq!(Presenter::Ppm.source(), "present_ppm.c");
         assert_eq!(Presenter::DevelopmentStream.source(), "present_stream.c");
         assert_ne!(Presenter::Ppm.name(), Presenter::DevelopmentStream.name());
+        assert!(Presenter::Ppm.compile_definitions().is_empty());
+        assert!(Presenter::Ppm.link_args().is_empty());
+    }
+
+    #[test]
+    fn cocoa_presenter_is_selected_only_for_macos_arm64() {
+        assert_eq!(
+            Presenter::native_for_target(HostTarget::MacOsArm64),
+            Ok(Presenter::Cocoa)
+        );
+        let error = Presenter::native_for_target(HostTarget::LinuxX86_64)
+            .expect_err("Linux must not select Cocoa");
+        assert!(error.contains("requires macOS ARM64"));
+        assert!(error.contains("speck build"));
+    }
+
+    #[test]
+    fn cocoa_policy_uses_objective_c_and_apple_frameworks() {
+        assert_eq!(Presenter::Cocoa.source(), "present_cocoa.m");
+        assert_eq!(Presenter::Cocoa.output_suffix(), "_native");
+        assert_eq!(
+            Presenter::Cocoa.source_compile_args(),
+            ["-x", "objective-c"]
+        );
+        assert_eq!(
+            Presenter::Cocoa.compile_definitions(),
+            ["-DCRUMB_COCOA=1", "-DCRUMB_PACED=1"]
+        );
+        assert_eq!(
+            Presenter::Cocoa.link_args(),
+            ["-framework", "AppKit", "-framework", "CoreGraphics"]
+        );
+        assert!(!Presenter::Ppm.link_args().contains(&"AppKit"));
+        assert!(!Presenter::DevelopmentStream.link_args().contains(&"AppKit"));
     }
 }

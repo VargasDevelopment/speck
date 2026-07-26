@@ -22,17 +22,20 @@ artifact and is not a normal game distribution.
 
 ## Measured macOS ARM64 artifact
 
-On the audited macOS 26.5.2 ARM64 host, the preceding portable-framebuffer slice
-produced a **34,016-byte** ARM64 Mach-O PIE for
-`examples/framebuffer_rect.spk`. `otool -L` reported one dynamic-library load,
-`/usr/lib/libSystem.B.dylib`. The final PPM was 172,815 bytes: its 15-byte P6
-header followed by exactly 320x180x3 RGB bytes. This Linux-authored presenter
-slice preserves the same macOS build abstraction and C dialect checks, but that
-Mac byte count should be refreshed on the Mac because the private presenter
-call boundary changed slightly.
+On the audited macOS 26.5.2 ARM64 host, the native Cocoa build of
+`examples/moving_rectangle.spk` is a **53,400-byte** ARM64 Mach-O PIE. Its direct
+dynamic loads are AppKit, CoreGraphics, CoreFoundation, `libobjc.A.dylib`, and
+`libSystem.B.dylib`; all are Apple system components. The executable contains
+the Objective-C window/view presenter and the portable framebuffer, but no
+Rust, Swift, browser, JavaScript, networking, PPM presenter, or third-party
+framework.
 
-This Mach-O size is recorded as its own host measurement. It must not be read as
-a direct size regression against the Linux ELF figures: Mach-O and ELF have
+The same checkout's deterministic PPM build of `examples/framebuffer_rect.spk`
+is **34,368 bytes** and loads only `libSystem.B.dylib`. Its final PPM remains
+172,815 bytes: a 15-byte P6 header followed by exactly 320x180x3 RGB bytes.
+
+These Mach-O sizes are recorded as host measurements. They must not be read as
+direct size regressions against the Linux ELF figures: Mach-O and ELF have
 different headers, load commands, alignment, stripping behavior, startup code,
 dynamic loaders, and system-library linkage conventions.
 
@@ -44,6 +47,12 @@ file build/framebuffer_rect
 otool -hv build/framebuffer_rect
 otool -L build/framebuffer_rect
 wc -c build/framebuffer_rect build/frame.ppm
+
+cargo run -- run examples/moving_rectangle.spk --frames 3
+file build/moving_rectangle_native
+otool -hv build/moving_rectangle_native
+otool -L build/moving_rectangle_native
+wc -c build/moving_rectangle_native
 ```
 
 ## Measured composition
@@ -75,10 +84,11 @@ with the executable. The framebuffer's BSS cost matters to runtime memory, even
 though it adds essentially no pixel payload to the executable on disk.
 
 The Rust HTTP server, embedded viewer HTML, and `ctrlc` dependency are compiled
-into the Speck development tool, not into either normal game binary. A string
+into the Speck development tool, not into generated game executables. A string
 audit of the normal graphics executable finds none of the private stream magic
-or environment-variable names. Normal builds compile only `present_ppm.c`;
-development runs compile only `present_stream.c` into their `_dev` executable.
+or environment-variable names. Normal builds compile only `present_ppm.c`,
+development runs compile only `present_stream.c`, and native runs compile only
+`present_cocoa.m` as their respective presenter.
 
 This development artifact is **not proof of final standalone floppy-disk
 compliance**. A byte count below the limit does not establish that the eventual

@@ -13,8 +13,9 @@ CRuMB is Speck's narrow C ABI platform layer. It owns startup, the frame loop,
 the frame delta, a fixed 320x180 RGB software framebuffer, debug output, and
 shutdown. Its normal headless build runs five deterministic frames and writes a
 PPM. A development-only presenter can instead stream complete frames to the
-Speck compiler's small browser server. CRuMB remains independent of SDL,
-Raylib, GLFW, and other game frameworks.
+Speck compiler's small browser server. On macOS ARM64, a native Cocoa presenter
+displays the same framebuffer in a resizable window. CRuMB remains independent
+of SDL, Raylib, GLFW, and other game frameworks.
 
 LLVM and the Speck compiler are development-time tools. They are not intended
 to ship with a compiled game; the build output is a native executable linked
@@ -38,9 +39,15 @@ cargo run -- build examples/framebuffer_rect.spk
 # Development-only live viewer (stops after 1,800 frames by default)
 cargo run -- dev examples/moving_rectangle.spk
 
+# Native macOS window (runs until the window closes or Ctrl-C)
+cargo run -- run examples/moving_rectangle.spk
+
+# Bounded native run for smoke tests
+cargo run -- run examples/moving_rectangle.spk --frames 3
+
 # macOS native-binary inspection
-file build/framebuffer_rect
-otool -L build/framebuffer_rect
+file build/moving_rectangle_native
+otool -L build/moving_rectangle_native
 ```
 
 The build command writes host-tagged, inspectable LLVM IR to
@@ -50,26 +57,34 @@ or with Clang otherwise, compiles it with Clang, and links it with
 executable byte size when complete.
 
 The framebuffer example writes the final headless frame to `build/frame.ppm`.
-The moving-rectangle example verifies browser presentation. Both are
+The moving-rectangle example verifies browser and native presentation. Both are
 infrastructure checks, not the contest game.
 
 `speck dev` builds a separate `_dev` executable, starts its native frame stream
 and a local HTTP viewer, and prints the exact viewer URL. It binds only to
 `127.0.0.1` unless `--bind` is supplied explicitly. See the
 [development viewer guide](docs/development-viewer.md) for remote access over
-an SSH tunnel, frame limits, and the transport protocol. The CLI remains
-organized so `check`, `run`, and `size` can be added naturally.
+an SSH tunnel, frame limits, and the transport protocol.
+
+`speck run` is currently available only on macOS ARM64. It builds a separately
+named `_native` executable and launches a normal AppKit window over CRuMB's
+320x180 RGB framebuffer. The window uses nearest-neighbor drawing, prefers
+integer backing-pixel scale factors, and centers or letterboxes the image while
+resizing. Interactive runs are unbounded; closing the window or pressing Ctrl-C
+requests an orderly shutdown. `--frames N` supplies the finite private runtime
+limit used by automation. It does not change Speck language semantics.
 
 ## Current limits
 
-This is an honest headless compiler/runtime slice, not a general-purpose
-language or a finished tiny-game platform. There is no heap, garbage collector,
-input, audio, arrays, modules, asset system, or native window. Graphics are
-currently limited to clearing the software framebuffer and drawing clipped
-filled rectangles. The browser viewer is remote development tooling, not a game
-runtime feature. Global initializers are literal constants, numeric types do
-not convert implicitly, and native executables use the host's dynamic C library.
-Native macOS presentation is intentionally deferred.
+This is an honest small compiler/runtime slice, not a general-purpose language
+or a finished tiny-game platform. There is no heap, garbage collector,
+input, audio, arrays, modules, or asset system. Graphics are currently limited
+to clearing the software framebuffer and drawing clipped filled rectangles.
+There is no keyboard, mouse, or controller input. The Cocoa presenter is a
+minimal macOS display path, and the browser viewer remains remote development
+tooling rather than game semantics. Global initializers are literal constants,
+numeric types do not convert implicitly, and native executables use the host's
+dynamic system libraries.
 
 See [the language reference](docs/language.md),
 [architecture](docs/architecture.md), [byte budget](docs/byte-budget.md), and

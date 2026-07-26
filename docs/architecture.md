@@ -11,7 +11,8 @@ development-process dependency (`ctrlc`); generated games do not link Rust:
   -> host-tagged textual LLVM emitter
   -> compatible llvm-as, or Clang-direct, validation and bitcode
   -> Clang native object
-  -> native link with CRuMB objects (LLD on Linux, Apple ld on macOS)
+  -> native link with selected CRuMB presenter objects
+       (LLD on Linux, Apple ld and system frameworks for Cocoa on macOS)
   -> native executable
 ```
 
@@ -44,10 +45,11 @@ directly. In either case, both `.ll` and `.bc` remain in `build/`.
 
 CRuMB's `crumb.h` is the stable C ABI boundary. The generated object exports
 `spk_start`, `spk_update(float)`, and `spk_draw`; CRuMB supplies `main`, owns the
-finite loop, and exposes initialization, frame delta, debug output, software
-drawing, and shutdown. A normal headless build executes five deterministic
-1/60-second frames. A development build uses an explicit finite frame limit and
-paces the loop at approximately 60 frames per second.
+loop, and exposes initialization, frame delta, debug output, software drawing,
+and shutdown. A normal headless build executes five deterministic 1/60-second
+frames without wall-clock pacing. A development browser build is finite and
+paced. A native Cocoa build is paced and unbounded by default, with a private
+finite override for tests.
 
 CRuMB's graphics path is split by responsibility:
 
@@ -58,18 +60,52 @@ CRuMB's graphics path is split by responsibility:
 - `present_stream.c` is selected only by `speck dev`. It connects to a loopback
   TCP listener created by the development host and sends length-checked,
   sequence-numbered complete RGB frames.
+- `present_cocoa.m` is selected only by `speck run` on macOS ARM64. It owns the
+  AppKit window, event pumping, CoreGraphics image presentation, backing-pixel
+  scaling, and window-close request.
 - `crumb.c` owns lifecycle sequencing and calls three private presenter hooks:
-  initialize, present, and shut down. It knows neither the framebuffer's
-  pixel-writing rules nor the selected presenter's implementation.
-- `platform/posix_main.c` contains only the program entry point used by both
-  supported hosts. The toolchain selects it as the platform source.
+  initialize, present, and shut down. The present hook reports continue, clean
+  stop, or error. CRuMB knows neither framebuffer pixel-writing rules nor the
+  selected presenter's implementation.
+- `platform/posix_main.c` supplies the program entry point and the private
+  SIGINT request flag used by both supported hosts. The signal handler performs
+  no work beyond setting `sig_atomic_t`; `crumb.c` observes it between frames,
+  shuts down the selected presenter, and restores the previous handler.
 
 The public C ABI provides fixed width, height, channel, stride, and byte-count
 constants plus immutable framebuffer pixel access. Browser, HTTP, TCP, and
-operating-system concepts are absent from this ABI and from Speck semantics. A
-future Cocoa presenter can implement the same private presenter hooks, consume
-the immutable framebuffer view, and leave Speck programs, drawing operations,
-and the rasterizer unchanged.
+operating-system concepts are absent from this ABI and from Speck semantics.
+Every presenter consumes the same immutable framebuffer view, so a future
+contest presenter can replace PPM, stream, or Cocoa without changing Speck
+programs, drawing operations, or the rasterizer.
+
+## Native Cocoa presenter
+
+`speck run game.spk` selects Cocoa only for a native macOS ARM64 host and emits
+separately named `_native` IR, bitcode, objects, and executable artifacts. The
+toolchain compiles `present_cocoa.m` explicitly as Objective-C and links AppKit
+and CoreGraphics only for that variant. Apple Clang's framework autolinking also
+records CoreFoundation, `libobjc`, and `libSystem` as direct system loads. PPM,
+browser-development, and normal Linux builds never compile the `.m` file or see
+Apple framework arguments.
+
+The presenter creates one titled, closable, miniaturizable, resizable `NSWindow`
+with a custom `NSView`. Each completed `spk_draw` is presented synchronously:
+the view makes a `CGImage` over CRuMB's packed RGB888 bytes, disables
+CoreGraphics interpolation and antialiasing, and draws into a centered
+backing-pixel rectangle. When at least one native-size framebuffer fits, the
+scale is the largest fitting integer; smaller windows use a fractional
+nearest-neighbor downscale. Unused space is black letterbox area. AppKit events
+are drained once per frame on the main thread. `windowWillClose` converts the
+close button into the private clean-stop result instead of terminating the
+process inside Cocoa.
+
+Both interactive presenters use a monotonic deadline advanced by 16,666,667 ns.
+Frame work consumes part of the interval, so CRuMB sleeps only for the remaining
+time instead of sleeping a fixed duration after every frame. A deadline missed
+by more than one interval is reset rather than causing an extended catch-up
+burst. The Speck-visible `dt` remains the provisional fixed `1/60`; it is
+simulation time, not a measurement of wall-clock work or display refresh.
 
 ## Development browser presenter
 
@@ -101,11 +137,15 @@ tool. They do not appear in a generated normal game executable.
 ## Current limitations
 
 - Native host support is limited to Linux x86-64 and macOS ARM64.
-- Output is dynamically linked against the host C library.
+- Output is dynamically linked against host system libraries and, for Cocoa,
+  Apple system frameworks.
 - CRuMB uses `printf` solely for development verification.
-- There is no native window, input, audio, asset, allocation, or interactive
-  platform backend. PPM and remote browser presentation are development
-  presenters; native macOS presentation is intentionally deferred.
+- The Cocoa presenter has no input, audio, assets, allocation API, display-link
+  synchronization, full-screen mode, or game-specific behavior. It redraws at
+  a deadline-paced nominal 60 Hz rather than synchronizing to the monitor's
+  refresh, so frame delivery can drift, tear, or skip under load.
+- Native window presentation is macOS ARM64-only. Linux retains PPM and browser
+  development presentation and never attempts to compile Objective-C.
 - The browser transport keeps only the newest frame and has no compression,
   authentication, TLS, input path, or hot reload. Its HTTP listener is
   loopback-only unless the developer explicitly selects another bind address.

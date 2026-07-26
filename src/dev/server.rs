@@ -193,6 +193,14 @@ pub fn spawn_frame_receiver(
             }
         };
 
+        if let Err(error) = stream.set_nonblocking(false) {
+            let _ = fatal.send(format!(
+                "could not configure frame stream blocking mode: {error}"
+            ));
+            shutdown.store(true, Ordering::Release);
+            frames.stop();
+            return;
+        }
         if let Err(error) = stream.set_read_timeout(Some(Duration::from_secs(2))) {
             let _ = fatal.send(format!("could not configure frame stream timeout: {error}"));
             shutdown.store(true, Ordering::Release);

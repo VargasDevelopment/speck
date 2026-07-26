@@ -79,8 +79,9 @@ presenter initialization, frame presentation, and presenter shutdown.
 - `speck dev` produces separately named `_dev` artifacts and links the loopback
   stream presenter. It also enables a finite, paced development loop controlled
   by `SPECK_FRAME_LIMIT` internally.
-- A future Cocoa implementation can select a native presenter at link time and
-  consume the same immutable framebuffer pixels.
+- `speck run` produces separately named `_native` artifacts on macOS ARM64 and
+  links the Cocoa presenter. It runs without a frame limit by default; the CLI's
+  `--frames` option supplies a bounded test override.
 
 Neither selection changes the Speck source, built-ins, framebuffer drawing
 operations, or stable `crumb.h` ABI. The transport environment variables are a

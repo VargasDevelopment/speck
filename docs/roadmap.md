@@ -12,10 +12,11 @@ Each milestone should remain a narrow, executable vertical slice.
 8. Cross-platform or contest-target build.
 9. First complete game.
 
-Milestone 1 is complete. Its portable software framebuffer now has both the
-deterministic PPM presenter and a development-only remote browser presenter.
-These validate pixels and live presentation without defining the eventual
-contest platform. Milestone 2 remains the next product-facing slice: a minimal
-native macOS presenter over the same framebuffer boundary, with no drawing API
-or Speck-language changes. Host-native compiler/runtime portability is proven
-on Linux x86-64 and macOS ARM64; cross-compilation remains deferred.
+Milestones 1 and 2 are complete. The portable software framebuffer now has a
+deterministic PPM presenter, a development-only remote browser presenter, and a
+minimal native macOS Cocoa presenter. All three use the same private presenter
+hooks and leave the eventual contest platform replaceable. The next recommended
+slice is minimal presenter-independent keyboard input state on macOS, with no
+audio, asset, or backend-framework expansion. Host-native compiler/runtime
+portability is proven on Linux x86-64 and macOS ARM64; cross-compilation remains
+deferred.

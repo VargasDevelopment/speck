@@ -85,6 +85,27 @@ clang --version
 ld -v
 ```
 
+### Native Cocoa presenter audit
+
+The first native-presentation slice was built and exercised on 2026-07-26 with
+the same ARM64 host, Apple Clang 21.0.0, Apple `ld` 1267, and macOS 26.5 SDK.
+Apple Clang compiled the portable sources as strict C11 and compiled only
+`runtime/crumb/present_cocoa.m` as Objective-C. The Cocoa link selected AppKit
+and CoreGraphics; `otool -L` also records their Apple system support loads,
+CoreFoundation, `libobjc`, and `libSystem`.
+
+The interactive command is:
+
+```sh
+cargo run -- run examples/moving_rectangle.spk
+```
+
+It produced a 53,400-byte ARM64 Mach-O on this host. A three-frame bounded run,
+window display, changing rectangle, standard window-close shutdown, SIGINT
+shutdown, PPM regression, and browser-stream regression were verified without
+installing packages or changing system configuration. The Cocoa code is not
+selected for Linux, PPM, or stream artifacts.
+
 ## Original Linux x86-64 audit
 
 The following audit was performed on 2026-07-25 before bootstrapping the first

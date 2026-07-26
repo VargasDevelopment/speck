@@ -6,7 +6,7 @@
 #define CRUMB_STRINGIFY_INNER(value) #value
 #define CRUMB_STRINGIFY(value) CRUMB_STRINGIFY_INNER(value)
 
-int crumb_present_init(void) { return 0; }
+int crumb_present_init(void) { return CRUMB_PRESENT_CONTINUE; }
 
 int crumb_present(void) {
     static const char header[] = "P6\n" CRUMB_STRINGIFY(
@@ -15,7 +15,7 @@ int crumb_present(void) {
     int failed = 0;
 
     if (output == NULL) {
-        return 1;
+        return CRUMB_PRESENT_ERROR;
     }
     if (fwrite(header, 1, sizeof(header) - 1, output) != sizeof(header) - 1) {
         failed = 1;
@@ -27,7 +27,7 @@ int crumb_present(void) {
     if (fclose(output) != 0) {
         failed = 1;
     }
-    return failed;
+    return failed ? CRUMB_PRESENT_ERROR : CRUMB_PRESENT_CONTINUE;
 }
 
 void crumb_present_shutdown(void) {}

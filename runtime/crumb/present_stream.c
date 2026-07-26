@@ -102,14 +102,14 @@ int crumb_present_init(void) {
         return 1;
     }
     frame_sequence = 0;
-    return 0;
+    return CRUMB_PRESENT_CONTINUE;
 }
 
 int crumb_present(void) {
     unsigned char header[CRUMB_FRAME_HEADER_BYTES] = {'S', 'P', 'K', 'F'};
 
     if (stream_socket < 0) {
-        return 1;
+        return CRUMB_PRESENT_ERROR;
     }
     ++frame_sequence;
     header[4] = CRUMB_FRAME_PROTOCOL_VERSION;
@@ -122,9 +122,9 @@ int crumb_present(void) {
 
     if (send_all(header, sizeof(header)) != 0 ||
         send_all(crumb_framebuffer_pixels(), CRUMB_FRAMEBUFFER_BYTES) != 0) {
-        return 1;
+        return CRUMB_PRESENT_ERROR;
     }
-    return 0;
+    return CRUMB_PRESENT_CONTINUE;
 }
 
 void crumb_present_shutdown(void) {
