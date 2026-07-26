@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -28,6 +29,14 @@ fn builds_and_executes_crumb_bum() {
             .expect("output executable should exist")
             .len()
             > 0
+    );
+    let executable =
+        fs::read(root.join("build/crumb_bum")).expect("normal game executable should be readable");
+    assert!(
+        !executable
+            .windows(b"SPECK_FRAME_STREAM_PORT".len())
+            .any(|window| window == b"SPECK_FRAME_STREAM_PORT"),
+        "normal game binary must not contain development transport code"
     );
 
     let run = Command::new(root.join("build/crumb_bum"))

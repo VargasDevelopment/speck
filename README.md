@@ -9,10 +9,12 @@ to native object code, and linked with CRuMB.
 
 **CRuMB — Compact Runtime for ultra-Minimal Binaries.**
 
-CRuMB is Speck's narrow C ABI platform layer. Its headless v0 owns startup, a
-deterministic five-frame loop, the frame delta, a fixed 320x180 RGB software
-framebuffer, debug output, and shutdown. It is intentionally independent of
-SDL, Raylib, GLFW, and other game frameworks.
+CRuMB is Speck's narrow C ABI platform layer. It owns startup, the frame loop,
+the frame delta, a fixed 320x180 RGB software framebuffer, debug output, and
+shutdown. Its normal headless build runs five deterministic frames and writes a
+PPM. A development-only presenter can instead stream complete frames to the
+Speck compiler's small browser server. CRuMB remains independent of SDL,
+Raylib, GLFW, and other game frameworks.
 
 LLVM and the Speck compiler are development-time tools. They are not intended
 to ship with a compiled game; the build output is a native executable linked
@@ -33,6 +35,9 @@ cargo run -- build examples/crumb_bum.spk
 cargo run -- build examples/framebuffer_rect.spk
 ./build/framebuffer_rect
 
+# Development-only live viewer (stops after 1,800 frames by default)
+cargo run -- dev examples/moving_rectangle.spk
+
 # macOS native-binary inspection
 file build/framebuffer_rect
 otool -L build/framebuffer_rect
@@ -45,21 +50,26 @@ or with Clang otherwise, compiles it with Clang, and links it with
 executable byte size when complete.
 
 The framebuffer example writes the final headless frame to `build/frame.ppm`.
-It verifies CRuMB infrastructure and is not the contest game.
+The moving-rectangle example verifies browser presentation. Both are
+infrastructure checks, not the contest game.
 
-Only `speck build` exists in this slice. The CLI is organized around a command
-argument so `check`, `run`, and `size` can be added without changing the
-compiler pipeline.
+`speck dev` builds a separate `_dev` executable, starts its native frame stream
+and a local HTTP viewer, and prints the exact viewer URL. It binds only to
+`127.0.0.1` unless `--bind` is supplied explicitly. See the
+[development viewer guide](docs/development-viewer.md) for remote access over
+an SSH tunnel, frame limits, and the transport protocol. The CLI remains
+organized so `check`, `run`, and `size` can be added naturally.
 
 ## Current limits
 
 This is an honest headless compiler/runtime slice, not a general-purpose
 language or a finished tiny-game platform. There is no heap, garbage collector,
-on-screen presentation, input, audio, arrays, modules, or asset system. Graphics
-are currently limited to clearing the software framebuffer and drawing clipped
-filled rectangles. Global initializers are literal constants, numeric types do
+input, audio, arrays, modules, asset system, or native window. Graphics are
+currently limited to clearing the software framebuffer and drawing clipped
+filled rectangles. The browser viewer is remote development tooling, not a game
+runtime feature. Global initializers are literal constants, numeric types do
 not convert implicitly, and native executables use the host's dynamic C library.
-Native macOS window presentation is intentionally deferred.
+Native macOS presentation is intentionally deferred.
 
 See [the language reference](docs/language.md),
 [architecture](docs/architecture.md), [byte budget](docs/byte-budget.md), and

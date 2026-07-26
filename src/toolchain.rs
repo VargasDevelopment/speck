@@ -192,31 +192,79 @@ pub struct BuildArtifacts {
     pub llvm_validation: LlvmValidation,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Presenter {
+    Ppm,
+    DevelopmentStream,
+}
+
+impl Presenter {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Ppm => "ppm",
+            Self::DevelopmentStream => "stream",
+        }
+    }
+
+    const fn source(self) -> &'static str {
+        match self {
+            Self::Ppm => "present_ppm.c",
+            Self::DevelopmentStream => "present_stream.c",
+        }
+    }
+}
+
 pub fn build(
     source_path: &Path,
     llvm_ir: &str,
     environment: &BuildEnvironment,
 ) -> Result<BuildArtifacts, String> {
+    build_with_presenter(source_path, llvm_ir, environment, Presenter::Ppm)
+}
+
+pub fn build_for_development(
+    source_path: &Path,
+    llvm_ir: &str,
+    environment: &BuildEnvironment,
+) -> Result<BuildArtifacts, String> {
+    build_with_presenter(
+        source_path,
+        llvm_ir,
+        environment,
+        Presenter::DevelopmentStream,
+    )
+}
+
+fn build_with_presenter(
+    source_path: &Path,
+    llvm_ir: &str,
+    environment: &BuildEnvironment,
+    presenter: Presenter,
+) -> Result<BuildArtifacts, String> {
     let artifact_name = artifact_name(source_path)?;
+    let output_name = match presenter {
+        Presenter::Ppm => artifact_name,
+        Presenter::DevelopmentStream => format!("{artifact_name}_dev"),
+    };
     let build_dir = env::current_dir()
         .map_err(|error| format!("could not find current directory: {error}"))?
         .join("build");
     fs::create_dir_all(&build_dir)
         .map_err(|error| format!("could not create `{}`: {error}", build_dir.display()))?;
 
-    let llvm_path = build_dir.join(format!("{artifact_name}.ll"));
-    let bitcode_path = build_dir.join(format!("{artifact_name}.bc"));
+    let llvm_path = build_dir.join(format!("{output_name}.ll"));
+    let bitcode_path = build_dir.join(format!("{output_name}.bc"));
     let object_path = build_dir.join(format!(
-        "{artifact_name}.{}",
+        "{output_name}.{}",
         environment.target.object_extension()
     ));
-    let executable_path = executable_path(&build_dir, &artifact_name, environment.target);
+    let executable_path = executable_path(&build_dir, &output_name, environment.target);
     fs::write(&llvm_path, llvm_ir)
         .map_err(|error| format!("could not write `{}`: {error}", llvm_path.display()))?;
 
     let llvm_validation =
         validate_and_compile_ir(environment, &llvm_path, &bitcode_path, &object_path)?;
-    let crumb_objects = compile_runtime(environment, &build_dir)?;
+    let crumb_objects = compile_runtime(environment, &build_dir, presenter)?;
     link_executable(environment, &object_path, &crumb_objects, &executable_path)?;
 
     let size = fs::metadata(&executable_path)
@@ -377,9 +425,10 @@ fn combine_failures(earlier: Option<String>, clang_failure: String) -> String {
 fn compile_runtime(
     environment: &BuildEnvironment,
     build_dir: &Path,
+    presenter: Presenter,
 ) -> Result<Vec<PathBuf>, String> {
     let crumb_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime/crumb");
-    let common_sources = ["crumb.c", "framebuffer.c", "present_ppm.c"];
+    let common_sources = ["crumb.c", "framebuffer.c", presenter.source()];
     let sources = common_sources.into_iter().chain(
         environment
             .target
@@ -393,7 +442,8 @@ fn compile_runtime(
         let source = crumb_dir.join(source_name);
         let object_stem = source_name.trim_end_matches(".c").replace(['/', '\\'], "_");
         let object = build_dir.join(format!(
-            "crumb_{object_stem}.{}",
+            "crumb_{}_{object_stem}.{}",
+            presenter.name(),
             environment.target.object_extension()
         ));
         let mut args = environment.target_args();
@@ -410,6 +460,9 @@ fn compile_runtime(
                 .iter()
                 .map(OsString::from),
         );
+        if presenter == Presenter::DevelopmentStream {
+            args.push(OsString::from("-DCRUMB_DEVELOPMENT=1"));
+        }
         args.extend([
             OsString::from("-c"),
             source.as_os_str().to_owned(),
@@ -669,5 +722,12 @@ mod tests {
         assert_eq!(target.link_args(), ["-Wl,-dead_strip,-S,-x"]);
         assert!(!target.link_args().iter().any(|arg| arg.contains("lld")));
         assert_eq!(target.runtime_platform_sources(), ["platform/posix_main.c"]);
+    }
+
+    #[test]
+    fn presenter_selection_keeps_stream_code_out_of_normal_builds() {
+        assert_eq!(Presenter::Ppm.source(), "present_ppm.c");
+        assert_eq!(Presenter::DevelopmentStream.source(), "present_stream.c");
+        assert_ne!(Presenter::Ppm.name(), Presenter::DevelopmentStream.name());
     }
 }

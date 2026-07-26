@@ -1,0 +1,21 @@
+game "Moving Rectangle Presenter Test"
+
+let x: i32 = 0
+let direction: i32 = 1
+
+start {}
+
+update(dt: f32) {
+    x = x + direction * 2
+    if x >= 300 {
+        direction = -direction
+    }
+    if x <= 0 {
+        direction = -direction
+    }
+}
+
+draw {
+    clear_rgb(255, 255, 255)
+    fill_rect(x, 80, 20, 20, 240, 150, 40)
+}

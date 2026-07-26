@@ -12,8 +12,10 @@ Each milestone should remain a narrow, executable vertical slice.
 8. Cross-platform or contest-target build.
 9. First complete game.
 
-Milestone 1 is complete. The headless software framebuffer is infrastructure
-for milestone 2, but milestone 2 still requires an actual presentation window;
-the current slice deliberately stops at deterministic PPM output. Host-native
-compiler/runtime portability is now proven on Linux x86-64 and macOS ARM64, but
-cross-compilation and native window presentation remain deferred.
+Milestone 1 is complete. Its portable software framebuffer now has both the
+deterministic PPM presenter and a development-only remote browser presenter.
+These validate pixels and live presentation without defining the eventual
+contest platform. Milestone 2 remains the next product-facing slice: a minimal
+native macOS presenter over the same framebuffer boundary, with no drawing API
+or Speck-language changes. Host-native compiler/runtime portability is proven
+on Linux x86-64 and macOS ARM64; cross-compilation remains deferred.

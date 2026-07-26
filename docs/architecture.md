@@ -1,6 +1,7 @@
 # Architecture
 
-The first slice is one dependency-free Rust crate plus a small C runtime:
+Speck remains one Rust crate plus a small C runtime. The compiler has one direct
+development-process dependency (`ctrlc`); generated games do not link Rust:
 
 ```text
 .spk source
@@ -44,34 +45,70 @@ directly. In either case, both `.ll` and `.bc` remain in `build/`.
 CRuMB's `crumb.h` is the stable C ABI boundary. The generated object exports
 `spk_start`, `spk_update(float)`, and `spk_draw`; CRuMB supplies `main`, owns the
 finite loop, and exposes initialization, frame delta, debug output, software
-drawing, and shutdown. The headless loop executes five deterministic
-1/60-second frames.
+drawing, and shutdown. A normal headless build executes five deterministic
+1/60-second frames. A development build uses an explicit finite frame limit and
+paces the loop at approximately 60 frames per second.
 
 CRuMB's graphics path is split by responsibility:
 
 - `framebuffer.c` owns a packed, row-major 320x180 RGB framebuffer and implements
   clear and clipped filled-rectangle rasterization.
-- `present_ppm.c` is the current headless presenter. After every `spk_draw`, it
+- `present_ppm.c` is selected for normal builds. After every `spk_draw`, it
   overwrites `build/frame.ppm` with a dependency-free binary P6 PPM image.
-- `crumb.c` owns lifecycle sequencing and calls the presenter; it does not know
-  the framebuffer's pixel-writing rules.
+- `present_stream.c` is selected only by `speck dev`. It connects to a loopback
+  TCP listener created by the development host and sends length-checked,
+  sequence-numbered complete RGB frames.
+- `crumb.c` owns lifecycle sequencing and calls three private presenter hooks:
+  initialize, present, and shut down. It knows neither the framebuffer's
+  pixel-writing rules nor the selected presenter's implementation.
 - `platform/posix_main.c` contains only the program entry point used by both
   supported hosts. The toolchain selects it as the platform source.
 
 The public C ABI provides fixed width, height, channel, stride, and byte-count
-constants plus immutable framebuffer pixel access. The ABI did not change for
-host portability. A future native presenter can consume this same pixel view
-and replace the PPM presentation call without changing Speck programs or the
-rasterizer.
+constants plus immutable framebuffer pixel access. Browser, HTTP, TCP, and
+operating-system concepts are absent from this ABI and from Speck semantics. A
+future Cocoa presenter can implement the same private presenter hooks, consume
+the immutable framebuffer view, and leave Speck programs, drawing operations,
+and the rasterizer unchanged.
+
+## Development browser presenter
+
+`speck dev` is a host-side orchestration mode, not a different language. It
+builds a separately named `_dev` native executable whose CRuMB objects contain
+the stream presenter instead of the PPM presenter. The compiler process creates
+two listeners:
+
+```text
+native Speck `_dev` process
+  -> private loopback TCP frame protocol
+  -> Rust development host (validates and retains latest complete frame)
+  -> localhost HTTP long polling
+  -> generic HTML canvas viewer
+```
+
+The binary frame channel and inherited game stdout/stderr are separate, so
+debug logs cannot corrupt framing. The server retains only the latest complete
+frame. A slow browser may skip frames, but it cannot observe a partial frame.
+HTTP long polling was sufficient for fixed 320x180 frames and avoided adding a
+WebSocket framework. The viewer disables smoothing and chooses integer scaling
+whenever the viewport can fit at least one native-size framebuffer.
+
+The normal build path selects only `present_ppm.c`; it does not compile or link
+the TCP presenter. The HTML, HTTP server, Ctrl-C handler, and orchestration code
+live in the Speck compiler executable, which is already a development-time
+tool. They do not appear in a generated normal game executable.
 
 ## Current limitations
 
 - Native host support is limited to Linux x86-64 and macOS ARM64.
 - Output is dynamically linked against the host C library.
 - CRuMB uses `printf` solely for development verification.
-- There is no window, input, audio, asset, allocation, or interactive platform
-  backend. PPM output is the only presenter; native macOS window presentation
-  is intentionally deferred.
+- There is no native window, input, audio, asset, allocation, or interactive
+  platform backend. PPM and remote browser presentation are development
+  presenters; native macOS presentation is intentionally deferred.
+- The browser transport keeps only the newest frame and has no compression,
+  authentication, TLS, input path, or hot reload. Its HTTP listener is
+  loopback-only unless the developer explicitly selects another bind address.
 - Software drawing is limited to clear and filled rectangles in RGB888 format.
 - Global initialization is deliberately constant-only.
 - Semantic analysis validates types and conservative return coverage but does

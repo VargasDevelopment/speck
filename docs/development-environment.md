@@ -168,6 +168,22 @@ project does not depend on CMake or pkg-config for this slice. It uses Cargo for
 the compiler, `llvm-as` for IR validation, Clang for object generation, and LLD
 for the final link.
 
+### Browser-presenter slice
+
+The development browser presenter was implemented and audited on this same
+Linux host on 2026-07-26. It required no system packages, display server, or
+elevated configuration. The native runtime side uses only C11 and POSIX TCP
+APIs shared by Linux and macOS. The Rust HTTP server and frame decoder use the
+standard library; `ctrlc` 3.5.2 is the one direct Cargo dependency added for
+portable development-process interruption handling.
+
+The managed development sandbox blocks loopback socket creation, so socket and
+end-to-end viewer tests were executed outside that sandbox with the same user
+account. The server itself was then manually verified on `127.0.0.1`: the HTML
+endpoint returned 200, a live frame returned exactly 172,800 RGB bytes, a
+finite run shut down cleanly, and an interrupted run left no child game
+process. No real browser or graphical backend was required for the test suite.
+
 The audit can be repeated with:
 
 ```sh

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Speck framebuffer</title>
+<style>
+  :root { color-scheme: dark; font-family: ui-monospace, monospace; }
+  body { margin: 0; min-height: 100vh; display: grid; place-content: center; gap: 12px;
+         background: #111; color: #ddd; text-align: center; overflow: auto; }
+  canvas { border: 1px solid #555; background: #000; image-rendering: pixelated;
+           image-rendering: crisp-edges; }
+  #status[data-state="live"] { color: #8f8; }
+  #status[data-state="stopped"], #status[data-state="disconnected"] { color: #f88; }
+</style>
+<canvas id="screen" width="320" height="180" aria-label="Speck framebuffer"></canvas>
+<div id="status" data-state="waiting">Waiting for the game…</div>
+<script>
+  const width = 320, height = 180, rgbBytes = width * height * 3;
+  const canvas = document.querySelector('#screen');
+  const status = document.querySelector('#status');
+  const context = canvas.getContext('2d', { alpha: false });
+  const image = context.createImageData(width, height);
+  context.imageSmoothingEnabled = false;
+  let sequence = 0;
+
+  function setStatus(state, text) {
+    status.dataset.state = state;
+    status.textContent = text;
+  }
+
+  function resize() {
+    const ratio = Math.min((innerWidth - 24) / width, (innerHeight - 70) / height);
+    const scale = ratio >= 1 ? Math.max(1, Math.floor(ratio)) : Math.max(0.1, ratio);
+    canvas.style.width = `${width * scale}px`;
+    canvas.style.height = `${height * scale}px`;
+  }
+
+  async function receiveFrames() {
+    for (;;) {
+      try {
+        const response = await fetch(`/frame?after=${sequence}`, { cache: 'no-store' });
+        const state = response.headers.get('X-Speck-State');
+        if (response.status === 200) {
+          const rgb = new Uint8Array(await response.arrayBuffer());
+          if (rgb.length !== rgbBytes || response.headers.get('X-Speck-Format') !== 'RGB8') {
+            throw new Error('invalid framebuffer payload');
+          }
+          for (let source = 0, target = 0; source < rgb.length; source += 3, target += 4) {
+            image.data[target] = rgb[source];
+            image.data[target + 1] = rgb[source + 1];
+            image.data[target + 2] = rgb[source + 2];
+            image.data[target + 3] = 255;
+          }
+          context.putImageData(image, 0, 0);
+          sequence = Number(response.headers.get('X-Speck-Sequence'));
+          setStatus('live', `Live — frame ${sequence}`);
+        } else if (response.status === 204 && state === 'stopped') {
+          setStatus('stopped', 'Stopped — game process exited');
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } else if (response.status === 204) {
+          setStatus('waiting', 'Waiting for the next frame…');
+        } else {
+          throw new Error(`HTTP ${response.status}`);
+        }
+      } catch (error) {
+        setStatus('disconnected', 'Disconnected — development server stopped');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+  }
+
+  addEventListener('resize', resize);
+  resize();
+  receiveFrames();
+</script>
+</html>

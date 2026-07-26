@@ -6,6 +6,7 @@ description = "A tiny compiled language for tiny native games"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+ctrlc = "3.5.2"
 
 [profile.release]
 codegen-units = 1
