@@ -1,0 +1,10 @@
+game "Framebuffer Rectangle"
+
+start {}
+
+update(dt: f32) {}
+
+draw {
+    clear_rgb(10, 20, 30)
+    fill_rect(12, 8, 20, 10, 240, 120, 30)
+}
