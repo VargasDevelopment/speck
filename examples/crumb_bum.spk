@@ -1,0 +1,42 @@
+game "Crumb Bum"
+
+let x: f32 = 10.0
+let velocity: f32 = 1800.0
+let frames: i32 = 0
+let active: bool = true
+
+fn advance(position: f32, speed: f32, dt: f32) -> f32 {
+    return position + speed * dt
+}
+
+start {
+    print_i32(1440)
+
+    let countdown: i32 = 2
+    while countdown > 0 {
+        print_i32(countdown)
+        countdown = countdown - 1
+    }
+}
+
+update(dt: f32) {
+    if active {
+        x = advance(x, velocity, dt)
+    } else {
+        x = 0.0
+    }
+
+    frames = frames + 1
+
+    if x > 100.0 {
+        velocity = 0.0 - velocity
+    }
+
+    if x < 0.0 {
+        velocity = 0.0 - velocity
+    }
+}
+
+draw {
+    debug_frame(frames, x)
+}
