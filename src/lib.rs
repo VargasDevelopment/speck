@@ -24,6 +24,17 @@ pub fn compile_to_llvm(source: &str) -> Result<String, Vec<Diagnostic>> {
     Ok(codegen::llvm::emit(&program))
 }
 
+pub fn compile_to_llvm_for_target(
+    source: &str,
+    target_triple: &str,
+) -> Result<String, Vec<Diagnostic>> {
+    let program = analyze(source)?;
+    Ok(codegen::llvm::emit_for_target(
+        &program,
+        Some(target_triple),
+    ))
+}
+
 pub fn render_diagnostics(path: &Path, source: &str, diagnostics: &[Diagnostic]) -> String {
     diagnostics
         .iter()

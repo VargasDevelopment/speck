@@ -38,5 +38,3 @@ int crumb_run(void) {
     crumb_shutdown();
     return 0;
 }
-
-int main(void) { return crumb_run(); }

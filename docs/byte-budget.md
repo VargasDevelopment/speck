@@ -14,6 +14,28 @@ dependency is `libc.so.6`. LLVM and the Speck compiler are build-time tools and
 are not part of the game executable, but the host dynamic loader and C library
 remain external requirements.
 
+## Measured macOS ARM64 artifact
+
+On the audited macOS 26.5.2 ARM64 host, `examples/framebuffer_rect.spk` produces
+a **34,016-byte** ARM64 Mach-O PIE. `otool -L` reports one dynamic-library load,
+`/usr/lib/libSystem.B.dylib`. The final PPM remains 172,815 bytes: its 15-byte
+P6 header is followed by exactly 320x180x3 RGB bytes.
+
+This Mach-O size is recorded as its own host measurement. It must not be read as
+a direct size regression against the Linux ELF figures: Mach-O and ELF have
+different headers, load commands, alignment, stripping behavior, startup code,
+dynamic loaders, and system-library linkage conventions.
+
+The macOS measurements were collected with:
+
+```sh
+cargo run -- build examples/framebuffer_rect.spk
+file build/framebuffer_rect
+otool -hv build/framebuffer_rect
+otool -L build/framebuffer_rect
+wc -c build/framebuffer_rect build/frame.ppm
+```
+
 ## Measured composition
 
 These figures come from GNU `size`, `nm`, `file`, `ldd`, and `readelf`:

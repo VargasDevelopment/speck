@@ -24,6 +24,10 @@ struct Value {
 }
 
 pub fn emit(program: &Program) -> String {
+    emit_for_target(program, None)
+}
+
+pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String {
     let functions = function_signatures(program);
     let globals: HashMap<_, _> = program
         .globals
@@ -46,7 +50,12 @@ pub fn emit(program: &Program) -> String {
         program.title.replace(['\r', '\n'], " ")
     )
     .expect("writing to a string cannot fail");
-    output.push_str("source_filename = \"speck\"\n\n");
+    output.push_str("source_filename = \"speck\"\n");
+    if let Some(target_triple) = target_triple {
+        writeln!(output, "target triple = \"{target_triple}\"")
+            .expect("writing to a string cannot fail");
+    }
+    output.push('\n');
     output.push_str("declare void @crumb_print_i32(i32)\n");
     output.push_str("declare void @crumb_debug_frame(i32, float)\n");
     output.push_str("declare void @crumb_clear_rgb(i32, i32, i32)\n");

@@ -18,6 +18,9 @@ fn builds_and_executes_crumb_bum() {
     );
     let build_stdout = String::from_utf8_lossy(&build.stdout);
     assert!(build_stdout.contains("LLVM IR: build/crumb_bum.ll"));
+    assert!(build_stdout.contains("Host target: "));
+    assert!(build_stdout.contains("LLVM target: "));
+    assert!(build_stdout.contains("LLVM validation: "));
     assert!(build_stdout.contains("Size: "));
     assert!(
         root.join("build/crumb_bum")
