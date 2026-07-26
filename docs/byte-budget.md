@@ -3,9 +3,10 @@
 The eventual maximum distribution size is **1,474,560 bytes**, the capacity of
 a 1.44 MB floppy disk.
 
-The verified `examples/crumb_bum.spk` build is **4,976 bytes** on the audited
-Ubuntu 26.04 x86_64 environment. It is a stripped ELF position-independent
-executable with no debug sections.
+On the audited Ubuntu 26.04 x86_64 environment, the verified software-graphics
+infrastructure example is **5,752 bytes**, and the existing `crumb_bum` example
+is **5,768 bytes** after linking the framebuffer and PPM presenter. Both are
+stripped ELF position-independent executables with no debug sections.
 
 The current Linux development artifact is dynamically linked. Its interpreter
 is `/lib64/ld-linux-x86-64.so.2`, and its only reported shared-library
@@ -19,13 +20,15 @@ These figures come from GNU `size`, `nm`, `file`, `ldd`, and `readelf`:
 
 | Measurement | Bytes | Meaning |
 | --- | ---: | --- |
-| Final ELF file | 4,976 | Entire development executable on disk |
-| Linked `.text` | 518 | Speck, CRuMB, and compiler/linker startup machine code |
-| Linked `.init`, `.fini`, and `.plt` | 88 | Dynamic-process and linkage code |
-| Generated game object code | 195 | Pre-link `.text` attributable to Speck output |
-| Generated game data/BSS/constants | 16 | Pre-link mutable state and float constant |
-| CRuMB function code | 96 | Pre-link sum of CRuMB function sections |
-| CRuMB constants/format strings | 28 | Pre-link read-only data |
+| Graphics example ELF file | 5,752 | Entire development executable on disk |
+| Linked `.text` | 970 | Speck, CRuMB, framebuffer, PPM, and startup machine code |
+| Linked `.init`, `.fini`, and `.plt` | 136 | Dynamic-process and linkage code |
+| Generated graphics-example code | 99 | Pre-link `.text` attributable to Speck output |
+| CRuMB lifecycle/debug code | 170 | Pre-link sum of lifecycle function sections |
+| CRuMB framebuffer code | 390 | Pre-link clear, rectangle, and pixel-view functions |
+| PPM presenter code | 133 | Pre-link dependency-free P6 encoder |
+| Framebuffer BSS | 172,800 | Runtime memory; zero-initialized and not stored in the ELF file |
+| Final `frame.ppm` | 172,815 | 15-byte header plus 320x180x3 pixel bytes |
 | Debug information | 0 | No debug sections; final file is stripped |
 | `.comment` | 104 | Compiler-identification metadata |
 
@@ -34,6 +37,10 @@ and string tables, relocations, loader metadata, alignment, and other link-time
 overhead. Pre-link object totals do not add directly to the final ELF because
 LLD merges sections, removes unused content, and adds process-startup and
 dynamic-linking structures.
+
+`frame.ppm` is a development presentation artifact, not a file that must ship
+with the executable. The framebuffer's BSS cost matters to runtime memory, even
+though it adds essentially no pixel payload to the executable on disk.
 
 This development artifact is **not proof of final standalone floppy-disk
 compliance**. A byte count below the limit does not establish that the eventual

@@ -39,7 +39,6 @@ pub fn build(source_path: &Path, llvm_ir: &str) -> Result<BuildArtifacts, String
     let llvm_path = build_dir.join(format!("{artifact_name}.ll"));
     let bitcode_path = build_dir.join(format!("{artifact_name}.bc"));
     let object_path = build_dir.join(format!("{artifact_name}.o"));
-    let crumb_object_path = build_dir.join("crumb.o");
     let executable_path = build_dir.join(&artifact_name);
     fs::write(&llvm_path, llvm_ir)
         .map_err(|error| format!("could not write `{}`: {error}", llvm_path.display()))?;
@@ -63,32 +62,41 @@ pub fn build(source_path: &Path, llvm_ir: &str) -> Result<BuildArtifacts, String
         ],
     )?;
 
-    let crumb_source = Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime/crumb/crumb.c");
-    run(
-        "clang",
-        [
-            OsString::from("-std=c11"),
-            OsString::from("-Os"),
-            OsString::from("-ffunction-sections"),
-            OsString::from("-fdata-sections"),
-            OsString::from("-fno-asynchronous-unwind-tables"),
-            OsString::from("-c"),
-            crumb_source.as_os_str().to_owned(),
-            OsString::from("-o"),
-            crumb_object_path.as_os_str().to_owned(),
-        ],
-    )?;
-    run(
-        "clang",
-        [
-            OsString::from("-fuse-ld=lld"),
-            OsString::from("-Wl,--gc-sections,--strip-all"),
-            object_path.as_os_str().to_owned(),
-            crumb_object_path.as_os_str().to_owned(),
-            OsString::from("-o"),
-            executable_path.as_os_str().to_owned(),
-        ],
-    )?;
+    let crumb_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime/crumb");
+    let mut crumb_objects = Vec::new();
+    for source_name in ["crumb", "framebuffer", "present_ppm"] {
+        let source = crumb_dir.join(format!("{source_name}.c"));
+        let object = build_dir.join(format!("crumb_{source_name}.o"));
+        run(
+            "clang",
+            [
+                OsString::from("-std=c11"),
+                OsString::from("-Os"),
+                OsString::from("-ffunction-sections"),
+                OsString::from("-fdata-sections"),
+                OsString::from("-fno-asynchronous-unwind-tables"),
+                OsString::from("-c"),
+                source.as_os_str().to_owned(),
+                OsString::from("-o"),
+                object.as_os_str().to_owned(),
+            ],
+        )?;
+        crumb_objects.push(object);
+    }
+
+    let mut link_args = vec![
+        OsString::from("-fuse-ld=lld"),
+        OsString::from("-Wl,--gc-sections,--strip-all"),
+        object_path.as_os_str().to_owned(),
+    ];
+    link_args.extend(
+        crumb_objects
+            .iter()
+            .map(|object| object.as_os_str().to_owned()),
+    );
+    link_args.push(OsString::from("-o"));
+    link_args.push(executable_path.as_os_str().to_owned());
+    run("clang", link_args)?;
 
     let size = fs::metadata(&executable_path)
         .map_err(|error| {

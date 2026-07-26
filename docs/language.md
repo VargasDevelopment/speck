@@ -50,6 +50,12 @@ arguments     = expression ("," expression)* ;
   CRuMB calls them; source code does not declare `main`.
 - The available CRuMB debug functions are `print_i32(value: i32)` and
   `debug_frame(frame: i32, value: f32)`. Both return no value.
+- The software graphics functions are `clear_rgb(r: i32, g: i32, b: i32)` and
+  `fill_rect(x: i32, y: i32, width: i32, height: i32, r: i32, g: i32, b: i32)`.
+  Both return no value, and no graphics-specific language type is introduced.
+- RGB components are clamped to 0 through 255. Filled rectangles use half-open
+  bounds, are clipped to the 320x180 framebuffer, and do nothing when width or
+  height is non-positive or the rectangle is wholly outside the framebuffer.
 - Global initializers are currently restricted to numeric or Boolean literals,
   optionally with unary `-` for numeric literals.
 - `i32` division is signed integer division. Floating comparisons are ordered,

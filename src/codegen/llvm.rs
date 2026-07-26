@@ -48,7 +48,9 @@ pub fn emit(program: &Program) -> String {
     .expect("writing to a string cannot fail");
     output.push_str("source_filename = \"speck\"\n\n");
     output.push_str("declare void @crumb_print_i32(i32)\n");
-    output.push_str("declare void @crumb_debug_frame(i32, float)\n\n");
+    output.push_str("declare void @crumb_debug_frame(i32, float)\n");
+    output.push_str("declare void @crumb_clear_rgb(i32, i32, i32)\n");
+    output.push_str("declare void @crumb_fill_rect(i32, i32, i32, i32, i32, i32, i32)\n\n");
 
     for global in &program.globals {
         writeln!(
@@ -89,6 +91,20 @@ fn function_signatures(program: &Program) -> HashMap<String, Signature> {
             Signature {
                 return_type: Type::Void,
                 symbol: "@crumb_debug_frame".into(),
+            },
+        ),
+        (
+            "clear_rgb".into(),
+            Signature {
+                return_type: Type::Void,
+                symbol: "@crumb_clear_rgb".into(),
+            },
+        ),
+        (
+            "fill_rect".into(),
+            Signature {
+                return_type: Type::Void,
+                symbol: "@crumb_fill_rect".into(),
             },
         ),
     ]);
@@ -518,13 +534,21 @@ update(dt: f32) {
     frames = add(frames, 1)
     if frames > 2 { frames = 0 }
 }
-draw { debug_frame(frames, 1.0) }
+draw {
+    debug_frame(frames, 1.0)
+    clear_rgb(1, 2, 3)
+    fill_rect(10, 20, 30, 40, 50, 60, 70)
+}
 "#;
         let ir = compile_to_llvm(source).expect("compilation should pass");
         assert!(ir.contains("define i32 @spk_fn_add"));
         assert!(ir.contains("call i32 @spk_fn_add"));
         assert!(ir.contains("icmp sgt i32"));
         assert!(ir.contains("define void @spk_update(float %arg0)"));
+        assert!(ir.contains("call void @crumb_clear_rgb(i32 1, i32 2, i32 3)"));
+        assert!(ir.contains(
+            "call void @crumb_fill_rect(i32 10, i32 20, i32 30, i32 40, i32 50, i32 60, i32 70)"
+        ));
 
         let tokens = lexer::lex(source).expect("lexing should pass");
         let program = parser::parse(tokens).expect("parsing should pass");

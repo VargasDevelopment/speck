@@ -131,6 +131,20 @@ fn builtins() -> HashMap<String, Signature> {
                 return_type: Type::Void,
             },
         ),
+        (
+            "clear_rgb".into(),
+            Signature {
+                params: vec![Type::I32, Type::I32, Type::I32],
+                return_type: Type::Void,
+            },
+        ),
+        (
+            "fill_rect".into(),
+            Signature {
+                params: vec![Type::I32; 7],
+                return_type: Type::Void,
+            },
+        ),
     ])
 }
 
@@ -528,5 +542,22 @@ mod tests {
                 .iter()
                 .any(|error| error.message.contains("must take exactly one `f32`"))
         );
+    }
+
+    #[test]
+    fn type_checks_graphics_builtin_arguments() {
+        let errors = errors(
+            "game \"Bad\"\nstart {}\nupdate(dt: f32) {}\ndraw { clear_rgb(0, true, 0) fill_rect(1, 2, 3) }",
+        );
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("argument 2 to `clear_rgb` expects `i32`, but found `bool`")
+        }));
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("function `fill_rect` expects 7 argument(s), but received 3")
+        }));
     }
 }

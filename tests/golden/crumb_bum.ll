@@ -3,6 +3,8 @@ source_filename = "speck"
 
 declare void @crumb_print_i32(i32)
 declare void @crumb_debug_frame(i32, float)
+declare void @crumb_clear_rgb(i32, i32, i32)
+declare void @crumb_fill_rect(i32, i32, i32, i32, i32, i32, i32)
 
 @spk_global_x = internal global float 1.00000000e+01
 @spk_global_velocity = internal global float 1.80000000e+03
