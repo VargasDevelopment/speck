@@ -15,8 +15,8 @@ use diagnostic::Diagnostic;
 
 pub fn analyze(source: &str) -> Result<Program, Vec<Diagnostic>> {
     let tokens = lexer::lex(source)?;
-    let program = parser::parse(tokens)?;
-    sema::check(&program)?;
+    let mut program = parser::parse(tokens)?;
+    sema::check(&mut program)?;
     Ok(program)
 }
 

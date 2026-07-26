@@ -2,25 +2,34 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::ast::{
-    BinaryOp, Block, Expr, ExprKind, Function, FunctionKind, Program, Stmt, StmtKind, Type, UnaryOp,
+    AssignOp, BinaryOp, Block, ConstantValue, Expr, ExprKind, Function, FunctionKind, Program,
+    ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
 };
 
 #[derive(Clone)]
 struct Signature {
-    return_type: Type,
+    return_type: ReturnType,
     symbol: String,
 }
 
 #[derive(Clone)]
 struct Variable {
-    ty: Type,
+    ty: ValueType,
     pointer: String,
 }
 
 #[derive(Clone)]
 struct Value {
-    ty: Type,
+    ty: ReturnType,
     repr: String,
+}
+
+impl Value {
+    fn value_type(&self) -> ValueType {
+        self.ty
+            .value_type()
+            .expect("semantic checking guarantees a value in this context")
+    }
 }
 
 pub fn emit(program: &Program) -> String {
@@ -39,6 +48,18 @@ pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String
                     ty: global.ty,
                     pointer: format!("@spk_global_{}", global.name),
                 },
+            )
+        })
+        .collect();
+    let constants = program
+        .constants
+        .iter()
+        .map(|constant| {
+            (
+                constant.name.clone(),
+                constant
+                    .value
+                    .expect("semantic checking evaluates every constant"),
             )
         })
         .collect();
@@ -62,12 +83,15 @@ pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String
     output.push_str("declare void @crumb_fill_rect(i32, i32, i32, i32, i32, i32, i32)\n\n");
 
     for global in &program.globals {
+        let value = global
+            .value
+            .expect("semantic checking evaluates every global initializer");
         writeln!(
             output,
             "@spk_global_{} = internal global {} {}",
             global.name,
-            llvm_type(global.ty),
-            global_constant(&global.init)
+            llvm_value_type(global.ty),
+            llvm_constant(value)
         )
         .expect("writing to a string cannot fail");
     }
@@ -76,7 +100,7 @@ pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String
     }
 
     for function in &program.functions {
-        let emitter = FunctionEmitter::new(function, &globals, &functions);
+        let emitter = FunctionEmitter::new(function, &globals, &constants, &functions);
         output.push_str(&emitter.emit());
         output.push('\n');
     }
@@ -91,28 +115,28 @@ fn function_signatures(program: &Program) -> HashMap<String, Signature> {
         (
             "print_i32".into(),
             Signature {
-                return_type: Type::Void,
+                return_type: ReturnType::Void,
                 symbol: "@crumb_print_i32".into(),
             },
         ),
         (
             "debug_frame".into(),
             Signature {
-                return_type: Type::Void,
+                return_type: ReturnType::Void,
                 symbol: "@crumb_debug_frame".into(),
             },
         ),
         (
             "clear_rgb".into(),
             Signature {
-                return_type: Type::Void,
+                return_type: ReturnType::Void,
                 symbol: "@crumb_clear_rgb".into(),
             },
         ),
         (
             "fill_rect".into(),
             Signature {
-                return_type: Type::Void,
+                return_type: ReturnType::Void,
                 symbol: "@crumb_fill_rect".into(),
             },
         ),
@@ -134,11 +158,13 @@ fn function_signatures(program: &Program) -> HashMap<String, Signature> {
 struct FunctionEmitter<'a> {
     function: &'a Function,
     globals: &'a HashMap<String, Variable>,
+    constants: &'a HashMap<String, ConstantValue>,
     functions: &'a HashMap<String, Signature>,
     scopes: Vec<HashMap<String, Variable>>,
     lines: Vec<String>,
     next_temp: usize,
     next_label: usize,
+    current_block: String,
     terminated: bool,
 }
 
@@ -146,16 +172,19 @@ impl<'a> FunctionEmitter<'a> {
     fn new(
         function: &'a Function,
         globals: &'a HashMap<String, Variable>,
+        constants: &'a HashMap<String, ConstantValue>,
         functions: &'a HashMap<String, Signature>,
     ) -> Self {
         Self {
             function,
             globals,
+            constants,
             functions,
             scopes: vec![HashMap::new()],
             lines: Vec::new(),
             next_temp: 0,
             next_label: 0,
+            current_block: "entry".into(),
             terminated: false,
         }
     }
@@ -166,7 +195,7 @@ impl<'a> FunctionEmitter<'a> {
             .params
             .iter()
             .enumerate()
-            .map(|(index, param)| format!("{} %arg{index}", llvm_type(param.ty)))
+            .map(|(index, param)| format!("{} %arg{index}", llvm_value_type(param.ty)))
             .collect::<Vec<_>>()
             .join(", ");
         let symbol = match self.function.kind {
@@ -178,16 +207,16 @@ impl<'a> FunctionEmitter<'a> {
 
         self.lines.push(format!(
             "define {} @{symbol}({params}) {{",
-            llvm_type(self.function.return_type)
+            llvm_return_type(self.function.return_type)
         ));
         self.lines.push("entry:".into());
 
         for (index, param) in self.function.params.iter().enumerate() {
             let pointer = self.temp();
-            self.instruction(format!("{pointer} = alloca {}", llvm_type(param.ty)));
+            self.instruction(format!("{pointer} = alloca {}", llvm_value_type(param.ty)));
             self.instruction(format!(
                 "store {} %arg{index}, ptr {pointer}",
-                llvm_type(param.ty)
+                llvm_value_type(param.ty)
             ));
             self.scopes[0].insert(
                 param.name.clone(),
@@ -200,7 +229,7 @@ impl<'a> FunctionEmitter<'a> {
 
         self.statements(&self.function.body);
         if !self.terminated {
-            if self.function.return_type == Type::Void {
+            if self.function.return_type == ReturnType::Void {
                 self.terminate("ret void".into());
             } else {
                 self.terminate("unreachable".into());
@@ -230,10 +259,10 @@ impl<'a> FunctionEmitter<'a> {
             StmtKind::Let { name, ty, init } => {
                 let value = self.expression(init);
                 let pointer = self.temp();
-                self.instruction(format!("{pointer} = alloca {}", llvm_type(*ty)));
+                self.instruction(format!("{pointer} = alloca {}", llvm_value_type(*ty)));
                 self.instruction(format!(
                     "store {} {}, ptr {pointer}",
-                    llvm_type(*ty),
+                    llvm_value_type(*ty),
                     value.repr
                 ));
                 self.scopes
@@ -241,14 +270,36 @@ impl<'a> FunctionEmitter<'a> {
                     .expect("a function always has a local scope")
                     .insert(name.clone(), Variable { ty: *ty, pointer });
             }
-            StmtKind::Assign { name, value } => {
+            StmtKind::Assign { name, op, value } => {
                 let variable = self
                     .variable(name)
                     .expect("semantic checking guarantees assignment targets");
-                let value = self.expression(value);
+                let value = if *op == AssignOp::Set {
+                    self.expression(value)
+                } else {
+                    let temp = self.temp();
+                    self.instruction(format!(
+                        "{temp} = load {}, ptr {}",
+                        llvm_value_type(variable.ty),
+                        variable.pointer
+                    ));
+                    let left = Value {
+                        ty: variable.ty.into(),
+                        repr: temp,
+                    };
+                    let right = self.expression(value);
+                    let binary_op = match op {
+                        AssignOp::Add => BinaryOp::Add,
+                        AssignOp::Subtract => BinaryOp::Subtract,
+                        AssignOp::Multiply => BinaryOp::Multiply,
+                        AssignOp::Divide => BinaryOp::Divide,
+                        AssignOp::Set => unreachable!(),
+                    };
+                    self.binary(left, binary_op, right)
+                };
                 self.instruction(format!(
                     "store {} {}, ptr {}",
-                    llvm_type(variable.ty),
+                    llvm_value_type(variable.ty),
                     value.repr,
                     variable.pointer
                 ));
@@ -265,7 +316,11 @@ impl<'a> FunctionEmitter<'a> {
             StmtKind::Return(value) => {
                 if let Some(value) = value {
                     let value = self.expression(value);
-                    self.terminate(format!("ret {} {}", llvm_type(value.ty), value.repr));
+                    self.terminate(format!(
+                        "ret {} {}",
+                        llvm_value_type(value.value_type()),
+                        value.repr
+                    ));
                 } else {
                     self.terminate("ret void".into());
                 }
@@ -342,43 +397,61 @@ impl<'a> FunctionEmitter<'a> {
     fn expression(&mut self, expression: &Expr) -> Value {
         match &expression.kind {
             ExprKind::I32(value) => Value {
-                ty: Type::I32,
+                ty: ValueType::I32.into(),
                 repr: value.to_string(),
             },
             ExprKind::F32(value) => Value {
-                ty: Type::F32,
+                ty: ValueType::F32.into(),
                 repr: llvm_float(*value),
             },
             ExprKind::Bool(value) => Value {
-                ty: Type::Bool,
+                ty: ValueType::Bool.into(),
                 repr: value.to_string(),
             },
             ExprKind::Variable(name) => {
-                let variable = self
-                    .variable(name)
-                    .expect("semantic checking guarantees variables");
-                let temp = self.temp();
-                self.instruction(format!(
-                    "{temp} = load {}, ptr {}",
-                    llvm_type(variable.ty),
-                    variable.pointer
-                ));
-                Value {
-                    ty: variable.ty,
-                    repr: temp,
+                if let Some(variable) = self.variable(name) {
+                    let temp = self.temp();
+                    self.instruction(format!(
+                        "{temp} = load {}, ptr {}",
+                        llvm_value_type(variable.ty),
+                        variable.pointer
+                    ));
+                    Value {
+                        ty: variable.ty.into(),
+                        repr: temp,
+                    }
+                } else {
+                    let value = self
+                        .constants
+                        .get(name)
+                        .copied()
+                        .expect("semantic checking guarantees constant references");
+                    Value {
+                        ty: value.ty().into(),
+                        repr: llvm_constant(value),
+                    }
                 }
             }
             ExprKind::Unary { op, operand } => {
+                if *op == UnaryOp::Negate
+                    && matches!(operand.kind, ExprKind::I32(value) if value == 2_147_483_648)
+                {
+                    return Value {
+                        ty: ValueType::I32.into(),
+                        repr: i32::MIN.to_string(),
+                    };
+                }
                 let operand = self.expression(operand);
+                let operand_type = operand.value_type();
                 let temp = self.temp();
-                let instruction = match (op, operand.ty) {
-                    (UnaryOp::Negate, Type::I32) => {
+                let instruction = match (op, operand_type) {
+                    (UnaryOp::Negate, ValueType::I32) => {
                         format!("{temp} = sub i32 0, {}", operand.repr)
                     }
-                    (UnaryOp::Negate, Type::F32) => {
+                    (UnaryOp::Negate, ValueType::F32) => {
                         format!("{temp} = fsub float {}, {}", llvm_float(0.0), operand.repr)
                     }
-                    (UnaryOp::Not, Type::Bool) => {
+                    (UnaryOp::Not, ValueType::Bool) => {
                         format!("{temp} = xor i1 {}, true", operand.repr)
                     }
                     _ => unreachable!("semantic checking guarantees unary operand types"),
@@ -390,9 +463,13 @@ impl<'a> FunctionEmitter<'a> {
                 }
             }
             ExprKind::Binary { left, op, right } => {
-                let left = self.expression(left);
-                let right = self.expression(right);
-                self.binary(left, *op, right)
+                if matches!(op, BinaryOp::LogicalAnd | BinaryOp::LogicalOr) {
+                    self.logical_expression(left, *op, right)
+                } else {
+                    let left = self.expression(left);
+                    let right = self.expression(right);
+                    self.binary(left, *op, right)
+                }
             }
             ExprKind::Call { name, args } => {
                 let signature = self
@@ -404,21 +481,21 @@ impl<'a> FunctionEmitter<'a> {
                     .iter()
                     .map(|argument| {
                         let value = self.expression(argument);
-                        format!("{} {}", llvm_type(value.ty), value.repr)
+                        format!("{} {}", llvm_value_type(value.value_type()), value.repr)
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                if signature.return_type == Type::Void {
+                if signature.return_type == ReturnType::Void {
                     self.instruction(format!("call void {}({args})", signature.symbol));
                     Value {
-                        ty: Type::Void,
+                        ty: ReturnType::Void,
                         repr: String::new(),
                     }
                 } else {
                     let temp = self.temp();
                     self.instruction(format!(
                         "{temp} = call {} {}({args})",
-                        llvm_type(signature.return_type),
+                        llvm_return_type(signature.return_type),
                         signature.symbol
                     ));
                     Value {
@@ -427,32 +504,174 @@ impl<'a> FunctionEmitter<'a> {
                     }
                 }
             }
+            ExprKind::Conversion { target, args } => {
+                let source = self.expression(&args[0]);
+                let source_type = source.value_type();
+                match (source_type, *target) {
+                    (ValueType::I32, ValueType::I32) | (ValueType::F32, ValueType::F32) => source,
+                    (ValueType::I32, ValueType::F32) => {
+                        let temp = self.temp();
+                        self.instruction(format!("{temp} = sitofp i32 {} to float", source.repr));
+                        Value {
+                            ty: ValueType::F32.into(),
+                            repr: temp,
+                        }
+                    }
+                    (ValueType::F32, ValueType::I32) => self.safe_float_to_int(source),
+                    _ => unreachable!("semantic checking guarantees numeric conversions"),
+                }
+            }
+        }
+    }
+
+    fn logical_expression(&mut self, left: &Expr, op: BinaryOp, right: &Expr) -> Value {
+        let left = self.expression(left);
+        let rhs_label = self.label("logical_rhs");
+        let short_label = self.label("logical_short");
+        let merge_label = self.label("logical_merge");
+        let short_value = if op == BinaryOp::LogicalAnd {
+            "false"
+        } else {
+            "true"
+        };
+        let branch = if op == BinaryOp::LogicalAnd {
+            format!(
+                "br i1 {}, label %{rhs_label}, label %{short_label}",
+                left.repr
+            )
+        } else {
+            format!(
+                "br i1 {}, label %{short_label}, label %{rhs_label}",
+                left.repr
+            )
+        };
+        self.terminate(branch);
+
+        self.place_label(&short_label);
+        self.terminate(format!("br label %{merge_label}"));
+
+        self.place_label(&rhs_label);
+        let right = self.expression(right);
+        let rhs_predecessor = self.current_block.clone();
+        self.terminate(format!("br label %{merge_label}"));
+
+        self.place_label(&merge_label);
+        let temp = self.temp();
+        self.instruction(format!(
+            "{temp} = phi i1 [{short_value}, %{short_label}], [{}, %{rhs_predecessor}]",
+            right.repr
+        ));
+        Value {
+            ty: ValueType::Bool.into(),
+            repr: temp,
+        }
+    }
+
+    fn safe_float_to_int(&mut self, source: Value) -> Value {
+        let nan_label = self.label("fptosi_nan");
+        let high_check_label = self.label("fptosi_high_check");
+        let high_label = self.label("fptosi_high");
+        let low_check_label = self.label("fptosi_low_check");
+        let low_label = self.label("fptosi_low");
+        let convert_label = self.label("fptosi_convert");
+        let merge_label = self.label("fptosi_merge");
+
+        let is_nan = self.temp();
+        self.instruction(format!("{is_nan} = fcmp uno float {0}, {0}", source.repr));
+        self.terminate(format!(
+            "br i1 {is_nan}, label %{nan_label}, label %{high_check_label}"
+        ));
+
+        self.place_label(&nan_label);
+        self.terminate(format!("br label %{merge_label}"));
+
+        self.place_label(&high_check_label);
+        let is_high = self.temp();
+        self.instruction(format!(
+            "{is_high} = fcmp oge float {}, 0x41E0000000000000",
+            source.repr
+        ));
+        self.terminate(format!(
+            "br i1 {is_high}, label %{high_label}, label %{low_check_label}"
+        ));
+
+        self.place_label(&high_label);
+        self.terminate(format!("br label %{merge_label}"));
+
+        self.place_label(&low_check_label);
+        let is_low = self.temp();
+        self.instruction(format!(
+            "{is_low} = fcmp ole float {}, 0xC1E0000000000000",
+            source.repr
+        ));
+        self.terminate(format!(
+            "br i1 {is_low}, label %{low_label}, label %{convert_label}"
+        ));
+
+        self.place_label(&low_label);
+        self.terminate(format!("br label %{merge_label}"));
+
+        self.place_label(&convert_label);
+        let converted = self.temp();
+        self.instruction(format!("{converted} = fptosi float {} to i32", source.repr));
+        self.terminate(format!("br label %{merge_label}"));
+
+        self.place_label(&merge_label);
+        let result = self.temp();
+        self.instruction(format!(
+            "{result} = phi i32 [0, %{nan_label}], [{}, %{high_label}], [{}, %{low_label}], [{converted}, %{convert_label}]",
+            i32::MAX,
+            i32::MIN
+        ));
+        Value {
+            ty: ValueType::I32.into(),
+            repr: result,
         }
     }
 
     fn binary(&mut self, left: Value, op: BinaryOp, right: Value) -> Value {
         let temp = self.temp();
-        let is_float = left.ty == Type::F32;
+        let left_type = left.value_type();
+        let is_float = left_type == ValueType::F32;
         let (instruction, result_type) = match op {
-            BinaryOp::Add => (if is_float { "fadd" } else { "add" }, left.ty),
-            BinaryOp::Subtract => (if is_float { "fsub" } else { "sub" }, left.ty),
-            BinaryOp::Multiply => (if is_float { "fmul" } else { "mul" }, left.ty),
-            BinaryOp::Divide => (if is_float { "fdiv" } else { "sdiv" }, left.ty),
-            BinaryOp::Equal => (if is_float { "fcmp oeq" } else { "icmp eq" }, Type::Bool),
-            BinaryOp::NotEqual => (if is_float { "fcmp one" } else { "icmp ne" }, Type::Bool),
-            BinaryOp::Less => (if is_float { "fcmp olt" } else { "icmp slt" }, Type::Bool),
-            BinaryOp::LessEqual => (if is_float { "fcmp ole" } else { "icmp sle" }, Type::Bool),
-            BinaryOp::Greater => (if is_float { "fcmp ogt" } else { "icmp sgt" }, Type::Bool),
-            BinaryOp::GreaterEqual => (if is_float { "fcmp oge" } else { "icmp sge" }, Type::Bool),
+            BinaryOp::Add => (if is_float { "fadd" } else { "add" }, left_type),
+            BinaryOp::Subtract => (if is_float { "fsub" } else { "sub" }, left_type),
+            BinaryOp::Multiply => (if is_float { "fmul" } else { "mul" }, left_type),
+            BinaryOp::Divide => (if is_float { "fdiv" } else { "sdiv" }, left_type),
+            BinaryOp::Equal => (
+                if is_float { "fcmp oeq" } else { "icmp eq" },
+                ValueType::Bool,
+            ),
+            BinaryOp::NotEqual => (
+                if is_float { "fcmp one" } else { "icmp ne" },
+                ValueType::Bool,
+            ),
+            BinaryOp::Less => (
+                if is_float { "fcmp olt" } else { "icmp slt" },
+                ValueType::Bool,
+            ),
+            BinaryOp::LessEqual => (
+                if is_float { "fcmp ole" } else { "icmp sle" },
+                ValueType::Bool,
+            ),
+            BinaryOp::Greater => (
+                if is_float { "fcmp ogt" } else { "icmp sgt" },
+                ValueType::Bool,
+            ),
+            BinaryOp::GreaterEqual => (
+                if is_float { "fcmp oge" } else { "icmp sge" },
+                ValueType::Bool,
+            ),
+            BinaryOp::LogicalAnd | BinaryOp::LogicalOr => unreachable!(),
         };
         self.instruction(format!(
             "{temp} = {instruction} {} {}, {}",
-            llvm_type(left.ty),
+            llvm_value_type(left_type),
             left.repr,
             right.repr
         ));
         Value {
-            ty: result_type,
+            ty: result_type.into(),
             repr: temp,
         }
     }
@@ -488,45 +707,36 @@ impl<'a> FunctionEmitter<'a> {
 
     fn place_label(&mut self, label: &str) {
         self.lines.push(format!("{label}:"));
+        self.current_block = label.to_owned();
         self.terminated = false;
     }
 }
 
-fn llvm_type(ty: Type) -> &'static str {
+fn llvm_value_type(ty: ValueType) -> &'static str {
     match ty {
-        Type::I32 => "i32",
-        Type::F32 => "float",
-        Type::Bool => "i1",
-        Type::Void => "void",
+        ValueType::I32 => "i32",
+        ValueType::F32 => "float",
+        ValueType::Bool => "i1",
     }
 }
 
-fn global_constant(expression: &Expr) -> String {
-    match &expression.kind {
-        ExprKind::I32(value) => value.to_string(),
-        ExprKind::F32(value) => llvm_float(*value),
-        ExprKind::Bool(value) => value.to_string(),
-        ExprKind::Unary {
-            op: UnaryOp::Negate,
-            operand,
-        } => match operand.kind {
-            ExprKind::I32(value) => (-value).to_string(),
-            ExprKind::F32(value) => llvm_float(-value),
-            _ => unreachable!("semantic checking limits global initializers"),
-        },
-        _ => unreachable!("semantic checking limits global initializers"),
+fn llvm_return_type(ty: ReturnType) -> &'static str {
+    match ty {
+        ReturnType::Value(ty) => llvm_value_type(ty),
+        ReturnType::Void => "void",
+    }
+}
+
+fn llvm_constant(value: ConstantValue) -> String {
+    match value {
+        ConstantValue::I32(value) => value.to_string(),
+        ConstantValue::F32(value) => llvm_float(value),
+        ConstantValue::Bool(value) => value.to_string(),
     }
 }
 
 fn llvm_float(value: f32) -> String {
-    let scientific = format!("{value:.8e}");
-    let (mantissa, exponent) = scientific
-        .split_once('e')
-        .expect("scientific float formatting always has an exponent");
-    let exponent: i32 = exponent
-        .parse()
-        .expect("scientific float formatting has a numeric exponent");
-    format!("{mantissa}e{exponent:+03}")
+    format!("0x{:016X}", (value as f64).to_bits())
 }
 
 #[cfg(test)]
@@ -560,7 +770,38 @@ draw {
         ));
 
         let tokens = lexer::lex(source).expect("lexing should pass");
-        let program = parser::parse(tokens).expect("parsing should pass");
-        sema::check(&program).expect("semantic checking should pass");
+        let mut program = parser::parse(tokens).expect("parsing should pass");
+        sema::check(&mut program).expect("semantic checking should pass");
+    }
+
+    #[test]
+    fn emits_conversions_short_circuit_void_constants_and_compound_assignment() {
+        let source = r#"game "Features"
+const TEN: i32 = 10
+let integer: i32 = TEN
+let decimal: f32 = 1.5
+fn effect() -> void { print_i32(TEN) }
+fn yes() -> bool { effect() return true }
+start {
+    decimal += f32(integer)
+    integer *= i32(decimal)
+    if false && yes() || true { effect() }
+}
+update(dt: f32) {}
+draw {}
+"#;
+        let ir = compile_to_llvm(source).expect("compilation should pass");
+        assert!(!ir.contains("@spk_global_TEN"));
+        assert!(ir.contains("define void @spk_fn_effect"));
+        assert!(ir.contains("call void @spk_fn_effect"));
+        assert!(ir.contains("ret void"));
+        assert!(ir.contains("sitofp i32"));
+        assert!(ir.contains("fptosi float"));
+        assert!(ir.contains("fptosi_nan"));
+        assert!(ir.contains("phi i32"));
+        assert!(ir.contains("logical_rhs"));
+        assert!(ir.contains("phi i1"));
+        assert!(ir.contains("fadd float"));
+        assert!(ir.contains("mul i32"));
     }
 }

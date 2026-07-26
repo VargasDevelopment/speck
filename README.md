@@ -32,6 +32,10 @@ cargo test --all-targets
 cargo run -- build examples/crumb_bum.spk
 ./build/crumb_bum
 
+# Language-ergonomics example: constants, conversions, void, &&/||, and +=
+cargo run -- build examples/delta_rectangle.spk
+./build/delta_rectangle
+
 # Infrastructure-only framebuffer verification
 cargo run -- build examples/framebuffer_rect.spk
 ./build/framebuffer_rect
@@ -41,6 +45,9 @@ cargo run -- dev examples/moving_rectangle.spk
 
 # Native macOS window (runs until the window closes or Ctrl-C)
 cargo run -- run examples/moving_rectangle.spk
+
+# The language-ergonomics sketch in the same native presenter
+cargo run -- run examples/delta_rectangle.spk
 
 # Bounded native run for smoke tests
 cargo run -- run examples/moving_rectangle.spk --frames 3
@@ -57,8 +64,11 @@ or with Clang otherwise, compiles it with Clang, and links it with
 executable byte size when complete.
 
 The framebuffer example writes the final headless frame to `build/frame.ppm`.
-The moving-rectangle example verifies browser and native presentation. Both are
-infrastructure checks, not the contest game.
+The original moving-rectangle example verifies browser and native presentation.
+`delta_rectangle.spk` expresses the same kind of sketch with named constants,
+`f32` simulation state, explicit pixel conversion, effect-only helper
+functions, short-circuit conditions, and compound assignment. These remain
+verification sketches, not the contest game.
 
 `speck dev` builds a separate `_dev` executable, starts its native frame stream
 and a local HTTP viewer, and prints the exact viewer URL. It binds only to
@@ -82,10 +92,13 @@ input, audio, arrays, modules, or asset system. Graphics are currently limited
 to clearing the software framebuffer and drawing clipped filled rectangles.
 There is no keyboard, mouse, or controller input. The Cocoa presenter is a
 minimal macOS display path, and the browser viewer remains remote development
-tooling rather than game semantics. Global initializers are literal constants,
-numeric types do not convert implicitly, and native executables use the host's
-dynamic system libraries.
+tooling rather than game semantics. Numeric types do not convert implicitly;
+`i32(...)` and `f32(...)` make conversions explicit. Top-level immutable
+constants and mutable globals use compile-time expressions, while native
+executables use the host's dynamic system libraries.
 
 See [the language reference](docs/language.md),
+[design principles](docs/design-principles.md),
+[language friction log](docs/friction-log.md),
 [architecture](docs/architecture.md), [byte budget](docs/byte-budget.md), and
 [roadmap](docs/roadmap.md).

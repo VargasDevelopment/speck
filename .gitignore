@@ -3,3 +3,4 @@
 /target/
 *.o
 *.bc
+.DS_Store

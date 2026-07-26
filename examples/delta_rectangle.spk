@@ -1,0 +1,51 @@
+game "Delta Rectangle"
+
+const SCREEN_WIDTH: i32 = 320
+const SCREEN_HEIGHT: i32 = 180
+const BOX_SIZE: i32 = 20
+const BOX_SPEED: f32 = 120.0
+
+let x: f32 = 0.0
+let y: f32 = 80.0
+let x_velocity: f32 = BOX_SPEED
+let y_velocity: f32 = BOX_SPEED
+
+fn should_be_skipped() -> bool {
+    print_i32(999)
+    return true
+}
+
+fn reverse_x() -> void {
+    x_velocity = -x_velocity
+}
+
+fn reverse_y() -> void {
+    y_velocity = -y_velocity
+}
+
+fn draw_box() -> void {
+    fill_rect(i32(x), i32(y), BOX_SIZE, BOX_SIZE, 240, 150, 40)
+}
+
+start {
+    if false && should_be_skipped() {}
+    if true || should_be_skipped() {}
+}
+
+update(dt: f32) {
+    x += x_velocity * dt
+    y += y_velocity * dt
+
+    if x <= 0.0 || x >= f32(SCREEN_WIDTH - BOX_SIZE) {
+        reverse_x()
+    }
+
+    if y <= 0.0 || y >= f32(SCREEN_HEIGHT - BOX_SIZE) {
+        reverse_y()
+    }
+}
+
+draw {
+    clear_rgb(255, 255, 255)
+    draw_box()
+}

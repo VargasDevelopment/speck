@@ -7,7 +7,7 @@ development-process dependency (`ctrlc`); generated games do not link Rust:
 .spk source
   -> lexer (tokens with byte spans)
   -> parser (AST)
-  -> semantic/type validation
+  -> semantic/type validation and compile-time constant evaluation
   -> host-tagged textual LLVM emitter
   -> compatible llvm-as, or Clang-direct, validation and bitcode
   -> Clang native object
@@ -26,6 +26,22 @@ The LLVM backend only produces text. Tool discovery, files, subprocesses, and
 linking live in `toolchain.rs`, keeping the emitter independent of LLVM's API.
 A future library-based backend can therefore replace the emitter without
 changing parsing or semantics.
+
+The validated AST now distinguishes `ValueType` (`i32`, `f32`, and `bool`) from
+`ReturnType` (a value type or `void`). Semantic analysis collects constant,
+global, and function names before checking bodies. A small dependency-walking
+constant evaluator annotates top-level constants and mutable-global
+initializers with their values, detects cycles and checked-expression errors,
+and lets LLVM inline constants without storage. This remains small enough that
+a separate HIR would duplicate rather than simplify the pipeline.
+
+Boolean `&&` and `||` lower directly to branches and merge phi nodes. Numeric
+compound assignment lowers to one target load, one right-expression evaluation,
+the existing typed arithmetic instruction, and one store. `f32`-to-`i32`
+conversion branches around the potentially unsafe `fptosi`: NaN, high, and low
+paths produce zero or a clamp value, and only a proven in-range path executes
+the conversion. User functions and all effect-only CRuMB declarations emit
+actual LLVM `void`, `call void`, and `ret void` forms.
 
 `toolchain.rs` contains the deliberately small host abstraction. It recognizes
 only Linux x86-64 and macOS ARM64, and owns the object/executable suffixes,
@@ -150,9 +166,9 @@ tool. They do not appear in a generated normal game executable.
   authentication, TLS, input path, or hot reload. Its HTTP listener is
   loopback-only unless the developer explicitly selects another bind address.
 - Software drawing is limited to clear and filled rectangles in RGB888 format.
-- Global initialization is deliberately constant-only.
-- Semantic analysis validates types and conservative return coverage but does
-  not yet model integer overflow or division-by-zero behavior beyond literal
-  range checking.
+- Global initialization is deliberately compile-time-only; local constants and
+  general compile-time execution do not exist.
+- Constant evaluation diagnoses integer overflow and division by zero. Runtime
+  integer overflow and division-by-zero behavior remain provisional.
 - The backend emits straightforward stack-based IR and relies on Clang's LLVM
   optimizer; it is inspectable rather than size-optimal.

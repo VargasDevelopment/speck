@@ -1,8 +1,8 @@
 use std::mem::discriminant;
 
 use crate::ast::{
-    BinaryOp, Block, Expr, ExprKind, Function, FunctionKind, Global, Param, Program, Stmt,
-    StmtKind, Type, UnaryOp,
+    AssignOp, BinaryOp, Block, Constant, Expr, ExprKind, Function, FunctionKind, Global, Param,
+    Program, ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
 };
 use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::{Token, TokenKind};
@@ -32,10 +32,13 @@ impl Parser {
         };
         self.take(&TokenKind::Semicolon);
 
+        let mut constants = Vec::new();
         let mut globals = Vec::new();
         let mut functions = Vec::new();
         while !self.at(&TokenKind::Eof) {
-            if self.at(&TokenKind::Let) {
+            if self.at(&TokenKind::Const) {
+                constants.push(self.parse_constant()?);
+            } else if self.at(&TokenKind::Let) {
                 globals.push(self.parse_global()?);
             } else if self.at(&TokenKind::Start) {
                 functions.push(self.parse_start()?);
@@ -47,7 +50,7 @@ impl Parser {
                 functions.push(self.parse_named_function()?);
             } else {
                 return Err(self.error_here(
-                    "expected a global `let`, `fn`, `start`, `update`, or `draw` declaration",
+                    "expected a top-level `const`, `let`, `fn`, `start`, `update`, or `draw` declaration",
                 ));
             }
         }
@@ -55,8 +58,29 @@ impl Parser {
         Ok(Program {
             title,
             title_span: title_token.span,
+            constants,
             globals,
             functions,
+        })
+    }
+
+    fn parse_constant(&mut self) -> Result<Constant, Diagnostic> {
+        let start = self.expect(&TokenKind::Const, "expected `const`")?.span;
+        let (name, _) = self.identifier("expected a constant name")?;
+        self.expect(&TokenKind::Colon, "expected `:` after constant name")?;
+        let ty = self.parse_value_type()?;
+        self.expect(
+            &TokenKind::Equal,
+            "expected `=` before constant initializer",
+        )?;
+        let init = self.expression()?;
+        let end = self.optional_semicolon().unwrap_or(init.span);
+        Ok(Constant {
+            name,
+            ty,
+            init,
+            value: None,
+            span: start.merge(end),
         })
     }
 
@@ -64,7 +88,7 @@ impl Parser {
         let start = self.expect(&TokenKind::Let, "expected `let`")?.span;
         let (name, _) = self.identifier("expected a global variable name")?;
         self.expect(&TokenKind::Colon, "expected `:` after variable name")?;
-        let ty = self.parse_type()?;
+        let ty = self.parse_value_type()?;
         self.expect(&TokenKind::Equal, "expected `=` before global initializer")?;
         let init = self.expression()?;
         let end = self.optional_semicolon().unwrap_or(init.span);
@@ -72,6 +96,7 @@ impl Parser {
             name,
             ty,
             init,
+            value: None,
             span: start.merge(end),
         })
     }
@@ -83,7 +108,7 @@ impl Parser {
             name: "start".into(),
             kind: FunctionKind::Start,
             params: Vec::new(),
-            return_type: Type::Void,
+            return_type: ReturnType::Void,
             body,
             span: start.merge(end),
         })
@@ -97,7 +122,7 @@ impl Parser {
             &TokenKind::Colon,
             "expected `:` after the frame-delta parameter name",
         )?;
-        let ty = self.parse_type()?;
+        let ty = self.parse_value_type()?;
         self.expect(
             &TokenKind::RightParen,
             "expected `)` after the frame-delta parameter",
@@ -111,7 +136,7 @@ impl Parser {
                 ty,
                 span: name_span,
             }],
-            return_type: Type::Void,
+            return_type: ReturnType::Void,
             body,
             span: start.merge(end),
         })
@@ -124,7 +149,7 @@ impl Parser {
             name: "draw".into(),
             kind: FunctionKind::Draw,
             params: Vec::new(),
-            return_type: Type::Void,
+            return_type: ReturnType::Void,
             body,
             span: start.merge(end),
         })
@@ -139,7 +164,7 @@ impl Parser {
             loop {
                 let (param_name, span) = self.identifier("expected a parameter name")?;
                 self.expect(&TokenKind::Colon, "expected `:` after parameter name")?;
-                let ty = self.parse_type()?;
+                let ty = self.parse_value_type()?;
                 params.push(Param {
                     name: param_name,
                     ty,
@@ -155,7 +180,7 @@ impl Parser {
             &TokenKind::Arrow,
             "expected `->` and a return type after parameters",
         )?;
-        let return_type = self.parse_type()?;
+        let return_type = self.parse_return_type()?;
         let (body, end) = self.block()?;
         Ok(Function {
             name,
@@ -167,16 +192,28 @@ impl Parser {
         })
     }
 
-    fn parse_type(&mut self) -> Result<Type, Diagnostic> {
+    fn parse_value_type(&mut self) -> Result<ValueType, Diagnostic> {
         let token = self.advance();
         match token.kind {
-            TokenKind::I32 => Ok(Type::I32),
-            TokenKind::F32 => Ok(Type::F32),
-            TokenKind::Bool => Ok(Type::Bool),
+            TokenKind::I32 => Ok(ValueType::I32),
+            TokenKind::F32 => Ok(ValueType::F32),
+            TokenKind::Bool => Ok(ValueType::Bool),
+            TokenKind::Void => Err(Diagnostic::new(
+                "`void` is only valid as a function return type",
+                token.span,
+            )),
             _ => Err(Diagnostic::new(
                 "expected type `i32`, `f32`, or `bool`",
                 token.span,
             )),
+        }
+    }
+
+    fn parse_return_type(&mut self) -> Result<ReturnType, Diagnostic> {
+        if self.take(&TokenKind::Void) {
+            Ok(ReturnType::Void)
+        } else {
+            self.parse_value_type().map(ReturnType::Value)
         }
     }
 
@@ -205,9 +242,7 @@ impl Parser {
         if self.at(&TokenKind::Return) {
             return self.return_statement();
         }
-        if matches!(self.current().kind, TokenKind::Identifier(_))
-            && self.peek_is(&TokenKind::Equal)
-        {
+        if matches!(self.current().kind, TokenKind::Identifier(_)) && self.peek_is_assignment() {
             return self.assignment_statement();
         }
 
@@ -224,7 +259,7 @@ impl Parser {
         let start = self.expect(&TokenKind::Let, "expected `let`")?.span;
         let (name, _) = self.identifier("expected a local variable name")?;
         self.expect(&TokenKind::Colon, "expected `:` after variable name")?;
-        let ty = self.parse_type()?;
+        let ty = self.parse_value_type()?;
         self.expect(&TokenKind::Equal, "expected `=` before initializer")?;
         let init = self.expression()?;
         let end = self.optional_semicolon().unwrap_or(init.span);
@@ -236,11 +271,24 @@ impl Parser {
 
     fn assignment_statement(&mut self) -> Result<Stmt, Diagnostic> {
         let (name, start) = self.identifier("expected a variable name")?;
-        self.expect(&TokenKind::Equal, "expected `=` in assignment")?;
+        let token = self.advance();
+        let op = match token.kind {
+            TokenKind::Equal => AssignOp::Set,
+            TokenKind::PlusEqual => AssignOp::Add,
+            TokenKind::MinusEqual => AssignOp::Subtract,
+            TokenKind::StarEqual => AssignOp::Multiply,
+            TokenKind::SlashEqual => AssignOp::Divide,
+            _ => {
+                return Err(Diagnostic::new(
+                    "expected an assignment operator",
+                    token.span,
+                ));
+            }
+        };
         let value = self.expression()?;
         let end = self.optional_semicolon().unwrap_or(value.span);
         Ok(Stmt {
-            kind: StmtKind::Assign { name, value },
+            kind: StmtKind::Assign { name, op, value },
             span: start.merge(end),
         })
     }
@@ -291,7 +339,25 @@ impl Parser {
     }
 
     fn expression(&mut self) -> Result<Expr, Diagnostic> {
-        self.equality()
+        self.logical_or()
+    }
+
+    fn logical_or(&mut self) -> Result<Expr, Diagnostic> {
+        let mut expression = self.logical_and()?;
+        while self.take(&TokenKind::OrOr) {
+            let right = self.logical_and()?;
+            expression = binary(expression, BinaryOp::LogicalOr, right);
+        }
+        Ok(expression)
+    }
+
+    fn logical_and(&mut self) -> Result<Expr, Diagnostic> {
+        let mut expression = self.equality()?;
+        while self.take(&TokenKind::AndAnd) {
+            let right = self.equality()?;
+            expression = binary(expression, BinaryOp::LogicalAnd, right);
+        }
+        Ok(expression)
     }
 
     fn equality(&mut self) -> Result<Expr, Diagnostic> {
@@ -412,20 +478,25 @@ impl Parser {
                         span: token.span,
                     });
                 }
-                let mut args = Vec::new();
-                if !self.at(&TokenKind::RightParen) {
-                    loop {
-                        args.push(self.expression()?);
-                        if !self.take(&TokenKind::Comma) {
-                            break;
-                        }
-                    }
-                }
-                let end = self
-                    .expect(&TokenKind::RightParen, "expected `)` after arguments")?
-                    .span;
+                let (args, end) = self.arguments()?;
                 Ok(Expr {
                     kind: ExprKind::Call { name, args },
+                    span: token.span.merge(end),
+                })
+            }
+            TokenKind::I32 | TokenKind::F32 => {
+                let target = if matches!(token.kind, TokenKind::I32) {
+                    ValueType::I32
+                } else {
+                    ValueType::F32
+                };
+                self.expect(
+                    &TokenKind::LeftParen,
+                    "expected `(` after numeric conversion type",
+                )?;
+                let (args, end) = self.arguments()?;
+                Ok(Expr {
+                    kind: ExprKind::Conversion { target, args },
                     span: token.span.merge(end),
                 })
             }
@@ -439,6 +510,22 @@ impl Parser {
             }
             _ => Err(Diagnostic::new("expected an expression", token.span)),
         }
+    }
+
+    fn arguments(&mut self) -> Result<(Vec<Expr>, Span), Diagnostic> {
+        let mut args = Vec::new();
+        if !self.at(&TokenKind::RightParen) {
+            loop {
+                args.push(self.expression()?);
+                if !self.take(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        let end = self
+            .expect(&TokenKind::RightParen, "expected `)` after arguments")?
+            .span;
+        Ok((args, end))
     }
 
     fn identifier(&mut self, message: &str) -> Result<(String, Span), Diagnostic> {
@@ -479,10 +566,17 @@ impl Parser {
         discriminant(&self.current().kind) == discriminant(kind)
     }
 
-    fn peek_is(&self, kind: &TokenKind) -> bool {
-        self.tokens
-            .get(self.cursor + 1)
-            .is_some_and(|token| discriminant(&token.kind) == discriminant(kind))
+    fn peek_is_assignment(&self) -> bool {
+        self.tokens.get(self.cursor + 1).is_some_and(|token| {
+            matches!(
+                token.kind,
+                TokenKind::Equal
+                    | TokenKind::PlusEqual
+                    | TokenKind::MinusEqual
+                    | TokenKind::StarEqual
+                    | TokenKind::SlashEqual
+            )
+        })
     }
 
     fn current(&self) -> &Token {
@@ -566,5 +660,90 @@ draw {}
         let tokens = lexer::lex("game \"Oops\"\nstart {").expect("lexing should pass");
         let errors = parse(tokens).expect_err("parsing should fail");
         assert!(errors[0].message.contains("expected `}`"));
+    }
+
+    #[test]
+    fn parses_constants_void_conversions_and_compound_assignments() {
+        let program = parse_source(
+            r#"game "Syntax"
+const LIMIT: i32 = 10
+let x: f32 = f32(LIMIT)
+fn effect() -> void { return }
+start { x += 1.0 x -= 1.0 x *= 2.0 x /= 2.0 effect() }
+update(dt: f32) {}
+draw {}
+"#,
+        );
+        assert_eq!(program.constants.len(), 1);
+        assert_eq!(program.functions[0].return_type, ReturnType::Void);
+        assert!(matches!(
+            program.globals[0].init.kind,
+            ExprKind::Conversion {
+                target: ValueType::F32,
+                ..
+            }
+        ));
+        let operators = program.functions[1]
+            .body
+            .iter()
+            .filter_map(|statement| match statement.kind {
+                StmtKind::Assign { op, .. } => Some(op),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            operators,
+            vec![
+                AssignOp::Add,
+                AssignOp::Subtract,
+                AssignOp::Multiply,
+                AssignOp::Divide,
+            ]
+        );
+    }
+
+    #[test]
+    fn boolean_composition_has_the_documented_precedence() {
+        let program = parse_source(
+            "game \"Booleans\"\nconst VALUE: bool = false || true && 1 == 1\nstart {}\nupdate(dt: f32) {}\ndraw {}",
+        );
+        let ExprKind::Binary { op, right, .. } = &program.constants[0].init.kind else {
+            panic!("expected logical-or expression");
+        };
+        assert_eq!(*op, BinaryOp::LogicalOr);
+        let ExprKind::Binary {
+            op: right_op,
+            right: equality,
+            ..
+        } = &right.kind
+        else {
+            panic!("expected logical-and expression");
+        };
+        assert_eq!(*right_op, BinaryOp::LogicalAnd);
+        assert!(matches!(
+            equality.kind,
+            ExprKind::Binary {
+                op: BinaryOp::Equal,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_void_in_value_type_positions() {
+        for source in [
+            "game \"Bad\"\nlet value: void = 1\nstart {}\nupdate(dt: f32) {}\ndraw {}",
+            "game \"Bad\"\nconst VALUE: void = 1\nstart {}\nupdate(dt: f32) {}\ndraw {}",
+            "game \"Bad\"\nfn bad(value: void) -> void {}\nstart {}\nupdate(dt: f32) {}\ndraw {}",
+            "game \"Bad\"\nstart { let value: void = 1 }\nupdate(dt: f32) {}\ndraw {}",
+        ] {
+            let tokens = lexer::lex(source).expect("lexing should pass");
+            let errors = parse(tokens).expect_err("void value type should fail");
+            assert!(
+                errors[0]
+                    .message
+                    .contains("only valid as a function return type")
+            );
+        }
     }
 }

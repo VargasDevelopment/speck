@@ -6,8 +6,8 @@ declare void @crumb_debug_frame(i32, float)
 declare void @crumb_clear_rgb(i32, i32, i32)
 declare void @crumb_fill_rect(i32, i32, i32, i32, i32, i32, i32)
 
-@spk_global_x = internal global float 1.00000000e+01
-@spk_global_velocity = internal global float 1.80000000e+03
+@spk_global_x = internal global float 0x4024000000000000
+@spk_global_velocity = internal global float 0x409C200000000000
 @spk_global_frames = internal global i32 0
 @spk_global_active = internal global i1 true
 
@@ -62,27 +62,27 @@ if_then_0:
   store float %t5, ptr @spk_global_x
   br label %if_end_1
 if_else_2:
-  store float 0.00000000e+00, ptr @spk_global_x
+  store float 0x0000000000000000, ptr @spk_global_x
   br label %if_end_1
 if_end_1:
   %t6 = load i32, ptr @spk_global_frames
   %t7 = add i32 %t6, 1
   store i32 %t7, ptr @spk_global_frames
   %t8 = load float, ptr @spk_global_x
-  %t9 = fcmp ogt float %t8, 1.00000000e+02
+  %t9 = fcmp ogt float %t8, 0x4059000000000000
   br i1 %t9, label %if_then_3, label %if_end_4
 if_then_3:
   %t10 = load float, ptr @spk_global_velocity
-  %t11 = fsub float 0.00000000e+00, %t10
+  %t11 = fsub float 0x0000000000000000, %t10
   store float %t11, ptr @spk_global_velocity
   br label %if_end_4
 if_end_4:
   %t12 = load float, ptr @spk_global_x
-  %t13 = fcmp olt float %t12, 0.00000000e+00
+  %t13 = fcmp olt float %t12, 0x0000000000000000
   br i1 %t13, label %if_then_5, label %if_end_6
 if_then_5:
   %t14 = load float, ptr @spk_global_velocity
-  %t15 = fsub float 0.00000000e+00, %t14
+  %t15 = fsub float 0x0000000000000000, %t14
   store float %t15, ptr @spk_global_velocity
   br label %if_end_6
 if_end_6:

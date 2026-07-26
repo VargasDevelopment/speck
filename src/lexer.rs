@@ -14,6 +14,7 @@ pub enum TokenKind {
     Float(f32),
     Game,
     Let,
+    Const,
     Start,
     Update,
     Draw,
@@ -27,6 +28,7 @@ pub enum TokenKind {
     I32,
     F32,
     Bool,
+    Void,
     LeftParen,
     RightParen,
     LeftBrace,
@@ -35,9 +37,13 @@ pub enum TokenKind {
     Comma,
     Semicolon,
     Plus,
+    PlusEqual,
     Minus,
+    MinusEqual,
     Star,
+    StarEqual,
     Slash,
+    SlashEqual,
     Bang,
     Equal,
     EqualEqual,
@@ -46,6 +52,8 @@ pub enum TokenKind {
     LessEqual,
     Greater,
     GreaterEqual,
+    AndAnd,
+    OrOr,
     Arrow,
     Eof,
 }
@@ -86,11 +94,15 @@ impl<'a> Lexer<'a> {
                 b':' => self.simple(TokenKind::Colon, start),
                 b',' => self.simple(TokenKind::Comma, start),
                 b';' => self.simple(TokenKind::Semicolon, start),
+                b'+' if self.take(b'=') => self.push(TokenKind::PlusEqual, start),
                 b'+' => self.simple(TokenKind::Plus, start),
+                b'*' if self.take(b'=') => self.push(TokenKind::StarEqual, start),
                 b'*' => self.simple(TokenKind::Star, start),
                 b'-' if self.take(b'>') => self.push(TokenKind::Arrow, start),
+                b'-' if self.take(b'=') => self.push(TokenKind::MinusEqual, start),
                 b'-' => self.simple(TokenKind::Minus, start),
                 b'/' if self.take(b'/') => self.line_comment(),
+                b'/' if self.take(b'=') => self.push(TokenKind::SlashEqual, start),
                 b'/' => self.simple(TokenKind::Slash, start),
                 b'!' if self.take(b'=') => self.push(TokenKind::BangEqual, start),
                 b'!' => self.simple(TokenKind::Bang, start),
@@ -100,6 +112,8 @@ impl<'a> Lexer<'a> {
                 b'<' => self.simple(TokenKind::Less, start),
                 b'>' if self.take(b'=') => self.push(TokenKind::GreaterEqual, start),
                 b'>' => self.simple(TokenKind::Greater, start),
+                b'&' if self.take(b'&') => self.push(TokenKind::AndAnd, start),
+                b'|' if self.take(b'|') => self.push(TokenKind::OrOr, start),
                 b'"' => self.string(start),
                 b'0'..=b'9' => self.number(start),
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.identifier(start),
@@ -229,6 +243,7 @@ impl<'a> Lexer<'a> {
         let kind = match text {
             "game" => TokenKind::Game,
             "let" => TokenKind::Let,
+            "const" => TokenKind::Const,
             "start" => TokenKind::Start,
             "update" => TokenKind::Update,
             "draw" => TokenKind::Draw,
@@ -242,6 +257,7 @@ impl<'a> Lexer<'a> {
             "i32" => TokenKind::I32,
             "f32" => TokenKind::F32,
             "bool" => TokenKind::Bool,
+            "void" => TokenKind::Void,
             _ => TokenKind::Identifier(text.to_owned()),
         };
         self.push(kind, start);
@@ -285,5 +301,42 @@ mod tests {
                 .render(std::path::Path::new("frog.spk"), source)
                 .contains("🐸")
         );
+    }
+
+    #[test]
+    fn lexes_longest_match_operators() {
+        let tokens = lex("+= -= *= /= <= >= == != && || -> + - * /").expect("operators should lex");
+        let kinds = tokens
+            .into_iter()
+            .map(|token| token.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::PlusEqual,
+                TokenKind::MinusEqual,
+                TokenKind::StarEqual,
+                TokenKind::SlashEqual,
+                TokenKind::LessEqual,
+                TokenKind::GreaterEqual,
+                TokenKind::EqualEqual,
+                TokenKind::BangEqual,
+                TokenKind::AndAnd,
+                TokenKind::OrOr,
+                TokenKind::Arrow,
+                TokenKind::Plus,
+                TokenKind::Minus,
+                TokenKind::Star,
+                TokenKind::Slash,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_single_boolean_operator_characters() {
+        let errors = lex("& |").expect_err("single boolean characters should fail");
+        assert_eq!(errors[0].message, "unexpected character `&`");
+        assert_eq!(errors[1].message, "unexpected character `|`");
     }
 }

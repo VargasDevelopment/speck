@@ -1,20 +1,67 @@
 use crate::diagnostic::Span;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Type {
+pub enum ValueType {
     I32,
     F32,
     Bool,
-    Void,
 }
 
-impl Type {
+impl ValueType {
     pub const fn name(self) -> &'static str {
         match self {
             Self::I32 => "i32",
             Self::F32 => "f32",
             Self::Bool => "bool",
+        }
+    }
+
+    pub const fn is_numeric(self) -> bool {
+        matches!(self, Self::I32 | Self::F32)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReturnType {
+    Value(ValueType),
+    Void,
+}
+
+impl ReturnType {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Value(ty) => ty.name(),
             Self::Void => "void",
+        }
+    }
+
+    pub const fn value_type(self) -> Option<ValueType> {
+        match self {
+            Self::Value(ty) => Some(ty),
+            Self::Void => None,
+        }
+    }
+}
+
+impl From<ValueType> for ReturnType {
+    fn from(value: ValueType) -> Self {
+        Self::Value(value)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ConstantValue {
+    I32(i32),
+    F32(f32),
+    Bool(bool),
+}
+
+impl ConstantValue {
+    pub const fn ty(self) -> ValueType {
+        match self {
+            Self::I32(_) => ValueType::I32,
+            Self::F32(_) => ValueType::F32,
+            Self::Bool(_) => ValueType::Bool,
         }
     }
 }
@@ -23,15 +70,26 @@ impl Type {
 pub struct Program {
     pub title: String,
     pub title_span: Span,
+    pub constants: Vec<Constant>,
     pub globals: Vec<Global>,
     pub functions: Vec<Function>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Constant {
+    pub name: String,
+    pub ty: ValueType,
+    pub init: Expr,
+    pub value: Option<ConstantValue>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Global {
     pub name: String,
-    pub ty: Type,
+    pub ty: ValueType,
     pub init: Expr,
+    pub value: Option<ConstantValue>,
     pub span: Span,
 }
 
@@ -48,7 +106,7 @@ pub struct Function {
     pub name: String,
     pub kind: FunctionKind,
     pub params: Vec<Param>,
-    pub return_type: Type,
+    pub return_type: ReturnType,
     pub body: Block,
     pub span: Span,
 }
@@ -56,7 +114,7 @@ pub struct Function {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Param {
     pub name: String,
-    pub ty: Type,
+    pub ty: ValueType,
     pub span: Span,
 }
 
@@ -72,11 +130,12 @@ pub struct Stmt {
 pub enum StmtKind {
     Let {
         name: String,
-        ty: Type,
+        ty: ValueType,
         init: Expr,
     },
     Assign {
         name: String,
+        op: AssignOp,
         value: Expr,
     },
     Expr(Expr),
@@ -117,6 +176,19 @@ pub enum ExprKind {
         name: String,
         args: Vec<Expr>,
     },
+    Conversion {
+        target: ValueType,
+        args: Vec<Expr>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssignOp {
+    Set,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,4 +209,6 @@ pub enum BinaryOp {
     LessEqual,
     Greater,
     GreaterEqual,
+    LogicalAnd,
+    LogicalOr,
 }
