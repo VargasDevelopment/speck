@@ -352,6 +352,7 @@ struct LengthConstantDefinition {
 
 struct LengthConstantEvaluator {
     definitions: HashMap<String, LengthConstantDefinition>,
+    structs: HashMap<String, StructDecl>,
     values: HashMap<String, ConstantValue>,
     visiting: Vec<String>,
 }
@@ -372,6 +373,11 @@ impl LengthConstantEvaluator {
                         },
                     )
                 })
+                .collect(),
+            structs: program
+                .structs
+                .iter()
+                .map(|declaration| (declaration.name.clone(), declaration.clone()))
                 .collect(),
             values: builtins::CONSTANTS
                 .iter()
@@ -428,10 +434,16 @@ impl LengthConstantEvaluator {
         let mut ty = definition.ty.clone();
         let mut diagnostics = Vec::new();
         resolve_value_type(&mut ty, self, &mut diagnostics);
+        let mut structs = self.structs.clone();
+        for declaration in structs.values_mut() {
+            for field in &mut declaration.fields {
+                resolve_value_type(&mut field.ty, self, &mut diagnostics);
+            }
+        }
         let result = if let Some(diagnostic) = diagnostics.into_iter().next() {
             Err(diagnostic)
         } else {
-            evaluate_typed_expression(&definition.init, &ty, |dependency| {
+            evaluate_typed_expression(&definition.init, &ty, &structs, |dependency| {
                 self.evaluate_value(dependency, definition.init.span)
             })
         };

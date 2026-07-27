@@ -17,6 +17,7 @@ struct Parser {
     tokens: Vec<Token>,
     cursor: usize,
     struct_names: HashSet<String>,
+    value_scopes: Vec<HashSet<String>>,
 }
 
 impl Parser {
@@ -37,6 +38,7 @@ impl Parser {
             tokens,
             cursor: 0,
             struct_names,
+            value_scopes: Vec::new(),
         }
     }
 
@@ -152,7 +154,7 @@ impl Parser {
 
     fn parse_start(&mut self) -> Result<Function, Diagnostic> {
         let start = self.expect(&TokenKind::Start, "expected `start`")?.span;
-        let (body, end) = self.block()?;
+        let (body, end) = self.function_block(Vec::new())?;
         Ok(Function {
             name: "start".into(),
             kind: FunctionKind::Start,
@@ -176,7 +178,7 @@ impl Parser {
             &TokenKind::RightParen,
             "expected `)` after the frame-delta parameter",
         )?;
-        let (body, end) = self.block()?;
+        let (body, end) = self.function_block(vec![name.clone()])?;
         Ok(Function {
             name: "update".into(),
             kind: FunctionKind::Update,
@@ -193,7 +195,7 @@ impl Parser {
 
     fn parse_draw(&mut self) -> Result<Function, Diagnostic> {
         let start = self.expect(&TokenKind::Draw, "expected `draw`")?.span;
-        let (body, end) = self.block()?;
+        let (body, end) = self.function_block(Vec::new())?;
         Ok(Function {
             name: "draw".into(),
             kind: FunctionKind::Draw,
@@ -230,7 +232,8 @@ impl Parser {
             "expected `->` and a return type after parameters",
         )?;
         let return_type = self.parse_return_type()?;
-        let (body, end) = self.block()?;
+        let parameter_names = params.iter().map(|param| param.name.clone()).collect();
+        let (body, end) = self.function_block(parameter_names)?;
         Ok(Function {
             name,
             kind: FunctionKind::Named,
@@ -310,8 +313,16 @@ impl Parser {
         }
     }
 
+    fn function_block(&mut self, bindings: Vec<String>) -> Result<(Block, Span), Diagnostic> {
+        self.value_scopes.push(bindings.into_iter().collect());
+        let result = self.block();
+        self.value_scopes.pop();
+        result
+    }
+
     fn block(&mut self) -> Result<(Block, Span), Diagnostic> {
         self.expect(&TokenKind::LeftBrace, "expected `{` to begin block")?;
+        self.value_scopes.push(HashSet::new());
         let mut statements = Vec::new();
         while !self.at(&TokenKind::RightBrace) && !self.at(&TokenKind::Eof) {
             statements.push(self.statement()?);
@@ -319,6 +330,7 @@ impl Parser {
         let end = self
             .expect(&TokenKind::RightBrace, "expected `}` to close block")?
             .span;
+        self.value_scopes.pop();
         Ok((statements, end))
     }
 
@@ -355,6 +367,10 @@ impl Parser {
         self.expect(&TokenKind::Equal, "expected `=` before initializer")?;
         let init = self.expression()?;
         let end = self.optional_semicolon().unwrap_or(init.span);
+        self.value_scopes
+            .last_mut()
+            .expect("local declarations are parsed inside a block")
+            .insert(name.clone());
         Ok(Stmt {
             kind: StmtKind::Let { name, ty, init },
             span: start.merge(end),
@@ -690,7 +706,7 @@ impl Parser {
     }
 
     fn looks_like_struct_literal(&self, name: &str) -> bool {
-        if !self.at(&TokenKind::LeftBrace) {
+        if !self.at(&TokenKind::LeftBrace) || self.is_value_binding(name) {
             return false;
         }
         self.struct_names.contains(name)
@@ -701,6 +717,13 @@ impl Parser {
                 ),
                 (Some(TokenKind::Identifier(_)), Some(TokenKind::Colon))
             )
+    }
+
+    fn is_value_binding(&self, name: &str) -> bool {
+        self.value_scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.contains(name))
     }
 
     fn arguments(&mut self) -> Result<(Vec<Expr>, Span), Diagnostic> {

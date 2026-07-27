@@ -96,6 +96,36 @@ fn constant_struct_fields_cannot_be_mutated() {
 }
 
 #[test]
+fn aggregate_equality_and_shadowed_struct_names_are_handled_before_codegen() {
+    assert_error(
+        r#"game "Bad Equality"
+struct Point { x: i32 }
+let a: Point = Point { x: 1 }
+let b: Point = Point { x: 1 }
+start { let same: bool = a == b }
+update(dt: f32) {}
+draw {}
+"#,
+        "equality comparison requires scalar operands",
+    );
+
+    let source = r#"game "Shadowing"
+struct Flag {}
+fn check(Flag: bool) -> void {
+    if Flag {}
+    while Flag { return }
+}
+start {
+    let Flag: bool = true
+    if Flag { check(Flag) }
+}
+update(dt: f32) {}
+draw {}
+"#;
+    speck::compile_to_llvm(source).expect("value bindings should shadow struct literal names");
+}
+
+#[test]
 fn platform_value_example_builds_verifies_and_executes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let work = root.join("target/platform_value_e2e");
