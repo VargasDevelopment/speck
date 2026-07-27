@@ -380,6 +380,13 @@ impl<'a> FunctionEmitter<'a> {
                 else_block,
             } => self.if_statement(condition, then_block, else_block.as_ref()),
             StmtKind::While { condition, body } => self.while_statement(condition, body),
+            StmtKind::For {
+                name,
+                lower,
+                upper,
+                body,
+                ..
+            } => self.for_statement(name, lower, upper, body),
             StmtKind::Return(value) => {
                 if let Some(value) = value {
                     let value = self.expression(value);
@@ -455,6 +462,52 @@ impl<'a> FunctionEmitter<'a> {
         self.place_label(&body_label);
         self.nested_block(body);
         if !self.terminated {
+            self.terminate(format!("br label %{condition_label}"));
+        }
+
+        self.place_label(&end_label);
+    }
+
+    fn for_statement(&mut self, name: &str, lower: &Expr, upper: &Expr, body: &Block) {
+        let lower = self.expression(lower);
+        let upper = self.expression(upper);
+        let pointer = self.temp();
+        self.instruction(format!("{pointer} = alloca i32"));
+        self.instruction(format!("store i32 {}, ptr {pointer}", lower.repr));
+
+        let condition_label = self.label("for_condition");
+        let body_label = self.label("for_body");
+        let end_label = self.label("for_end");
+        self.terminate(format!("br label %{condition_label}"));
+
+        self.place_label(&condition_label);
+        let current = self.temp();
+        self.instruction(format!("{current} = load i32, ptr {pointer}"));
+        let in_range = self.temp();
+        self.instruction(format!(
+            "{in_range} = icmp slt i32 {current}, {}",
+            upper.repr
+        ));
+        self.terminate(format!(
+            "br i1 {in_range}, label %{body_label}, label %{end_label}"
+        ));
+
+        self.place_label(&body_label);
+        self.scopes.push(HashMap::from([(
+            name.to_owned(),
+            Variable {
+                ty: ValueType::I32,
+                pointer: pointer.clone(),
+            },
+        )]));
+        self.statements(body);
+        self.scopes.pop();
+        if !self.terminated {
+            let current = self.temp();
+            self.instruction(format!("{current} = load i32, ptr {pointer}"));
+            let next = self.temp();
+            self.instruction(format!("{next} = add i32 {current}, 1"));
+            self.instruction(format!("store i32 {next}, ptr {pointer}"));
             self.terminate(format!("br label %{condition_label}"));
         }
 
@@ -630,10 +683,31 @@ impl<'a> FunctionEmitter<'a> {
                     }
                 }
             }
-            ExprKind::Index { .. } => {
-                let variable = self
-                    .lvalue(expression)
-                    .expect("semantic checking guarantees indexed lvalues");
+            ExprKind::Index { base, index } => {
+                let variable = if let Some(variable) = self.lvalue(expression) {
+                    variable
+                } else {
+                    let base = self.expression(base);
+                    let base_type = base.value_type();
+                    let (element_type, length) = base_type
+                        .resolved_array()
+                        .expect("semantic checking guarantees array index bases");
+                    let element_type = element_type.clone();
+                    let array_type = llvm_value_type(&base_type);
+                    let storage = self.entry_alloca(&array_type);
+                    self.instruction(format!("store {array_type} {}, ptr {storage}", base.repr));
+                    let index = self.expression(index);
+                    self.bounds_check(&index.repr, length);
+                    let pointer = self.temp();
+                    self.instruction(format!(
+                        "{pointer} = getelementptr inbounds {array_type}, ptr {storage}, i32 0, i32 {}",
+                        index.repr
+                    ));
+                    Variable {
+                        ty: element_type,
+                        pointer,
+                    }
+                };
                 let temp = self.temp();
                 self.instruction(format!(
                     "{temp} = load {}, ptr {}",
@@ -939,6 +1013,13 @@ impl<'a> FunctionEmitter<'a> {
         let name = format!("%t{}", self.next_temp);
         self.next_temp += 1;
         name
+    }
+
+    fn entry_alloca(&mut self, llvm_type: &str) -> String {
+        let pointer = self.temp();
+        self.lines
+            .insert(2, format!("  {pointer} = alloca {llvm_type}"));
+        pointer
     }
 
     fn label(&mut self, prefix: &str) -> String {

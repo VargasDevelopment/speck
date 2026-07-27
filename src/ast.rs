@@ -222,6 +222,13 @@ pub enum StmtKind {
         condition: Expr,
         body: Block,
     },
+    For {
+        name: String,
+        name_span: Span,
+        lower: Expr,
+        upper: Expr,
+        body: Block,
+    },
     Return(Option<Expr>),
 }
 

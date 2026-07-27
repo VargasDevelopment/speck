@@ -72,18 +72,10 @@ fn struct_diagnostics_cover_declarations_literals_and_fields() {
 }
 
 #[test]
-fn recursive_and_not_yet_composed_aggregate_types_are_rejected() {
+fn recursive_value_types_are_rejected() {
     assert_error(
         "game \"Bad\"\nstruct Node { next: Node }\nstart {}\nupdate(dt: f32) {}\ndraw {}\n",
         "recursive value type is not supported",
-    );
-    assert_error(
-        "game \"Bad\"\nstruct Point { x: i32 }\nlet points: [Point; 2] = [Point { x: 1 }, Point { x: 2 }]\nstart {}\nupdate(dt: f32) {}\ndraw {}\n",
-        "arrays of structs are added by the aggregate-composition slice",
-    );
-    assert_error(
-        "game \"Bad\"\nstruct State { values: [i32; 2] }\nstart {}\nupdate(dt: f32) {}\ndraw {}\n",
-        "aggregate-valued struct fields are added by the aggregate-composition slice",
     );
 }
 

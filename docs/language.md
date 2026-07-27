@@ -23,13 +23,15 @@ array_length  = integer | identifier ;
 return_type   = value_type | "void" ;
 
 block         = "{" statement* "}" ;
-statement     = local | assignment | if | while | return | expression ";"? ;
+statement     = local | assignment | if | while | for | return
+              | expression ";"? ;
 local         = "let" identifier ":" value_type "=" expression ";"? ;
 assignment    = assignable ("=" | "+=" | "-=" | "*=" | "/=")
                 expression ";"? ;
 assignable    = postfix ;
 if            = "if" expression block ("else" block)? ;
 while         = "while" expression block ;
+for           = "for" identifier "in" expression ".." expression block ;
 return        = "return" expression? ";"? ;
 
 expression    = logical_or ;
@@ -54,7 +56,7 @@ field_initializer = identifier ":" expression ","? ;
 `i32(...)` and `f32(...)` are conversion expressions, not function calls.
 Their type names are reserved only where the grammar already expects a type or
 conversion. The lexer uses longest-match rules for `+=`, `-=`, `*=`, `/=`,
-`<=`, `>=`, `==`, `!=`, `&&`, `||`, and `->`.
+`<=`, `>=`, `==`, `!=`, `&&`, `||`, `->`, and `..`.
 
 ## Types and functions
 
@@ -134,10 +136,6 @@ Writing any field path rooted in `const` is rejected. There are no methods,
 constructors, classes, inheritance, interfaces, traits, visibility rules,
 references, identity, reflection metadata, or dynamic dispatch.
 
-This struct-only slice deliberately keeps aggregate composition for the next
-stacked change: arrays of structs and aggregate-valued struct fields are
-diagnosed rather than partially accepted here.
-
 ## Fixed-size arrays and indexing
 
 An array type names its element type and fixed compile-time length:
@@ -180,6 +178,57 @@ can fold away checks for constant valid indices.
 
 Writing through an indexed path requires a mutable root. A path rooted in an
 immutable `const` array is rejected. Reading an element produces a value.
+
+## Aggregate composition
+
+Arrays may contain structs, and struct fields may contain fixed arrays or other
+non-recursive structs. Postfix access is composable, so reads and writes may
+alternate indexing and field selection:
+
+```text
+struct Platform {
+    x: i32
+    width: i32
+}
+
+struct Level {
+    platforms: [Platform; 2]
+    positions: [i32; 2]
+}
+
+let levels: [Level; 1] = [
+    Level {
+        platforms: [
+            Platform { x: 10, width: 20 },
+            Platform { x: 40, width: 30 }
+        ],
+        positions: [0, 0]
+    }
+]
+
+levels[0].platforms[1].x += 2
+levels[0].positions[0] = 50
+```
+
+Every aggregate remains a value. In:
+
+```text
+let copy: Platform = levels[0].platforms[0]
+copy.x = 99
+```
+
+the indexed read copies the `Platform`, so changing `copy` does not change
+`levels`. By contrast, `levels[0].platforms[0].x = 99` follows one lvalue path
+into the mutable global and changes the stored field. The root binding controls
+mutability for the complete path; no path rooted in a `const` value may be
+written.
+
+Compile-time initialization recursively accepts scalar constants, array
+literals, and struct literals. This permits immutable level data such as
+`const PLATFORMS: [Platform; 3] = [...]` without a runtime constructor. Nested
+fixed arrays also remain supported where their explicitly declared types
+match. Aggregate composition adds no references, aliases, hidden identity,
+runtime metadata, allocation, or heap.
 
 ## Explicit numeric conversions
 
@@ -267,6 +316,30 @@ Assignment remains a statement and does not produce a value.
 
 Locals use lexical block scope and may shadow outer names. Parameters preserve
 Speck's existing mutable behavior.
+
+## Exclusive range loops
+
+The narrow `for` statement iterates upward by exactly one over a
+lower-inclusive, upper-exclusive `i32` range:
+
+```text
+for i in 0..PLATFORM_COUNT {
+    draw_platform(PLATFORMS[i])
+}
+```
+
+The lower bound is evaluated once, then the upper bound is evaluated once,
+before the first condition check. Both must have type `i32`. The loop variable
+is a new read-only `i32` binding scoped to the loop body; it may shadow an outer
+name, and nested loops may shadow it again. Assigning or compound-assigning to
+the loop variable is an error.
+
+At each iteration Speck checks `i < upper`, runs the body when true, and then
+increments `i` by one. A lower bound greater than or equal to the upper bound
+therefore runs zero iterations. Negative bounds work normally. `..` is accepted
+only in this statement syntax: ranges are not values. There is no inclusive
+range, custom or negative step, array-item iteration, iterator protocol,
+`break`, `continue`, or loop expression.
 
 ## CRuMB functions and graphics
 
