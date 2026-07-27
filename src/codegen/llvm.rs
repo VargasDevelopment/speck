@@ -630,10 +630,32 @@ impl<'a> FunctionEmitter<'a> {
                     }
                 }
             }
-            ExprKind::Index { .. } => {
-                let variable = self
-                    .lvalue(expression)
-                    .expect("semantic checking guarantees indexed lvalues");
+            ExprKind::Index { base, index } => {
+                let variable = if let Some(variable) = self.lvalue(expression) {
+                    variable
+                } else {
+                    let base = self.expression(base);
+                    let base_type = base.value_type();
+                    let (element_type, length) = base_type
+                        .resolved_array()
+                        .expect("semantic checking guarantees array index bases");
+                    let element_type = element_type.clone();
+                    let array_type = llvm_value_type(&base_type);
+                    let storage = self.temp();
+                    self.instruction(format!("{storage} = alloca {array_type}"));
+                    self.instruction(format!("store {array_type} {}, ptr {storage}", base.repr));
+                    let index = self.expression(index);
+                    self.bounds_check(&index.repr, length);
+                    let pointer = self.temp();
+                    self.instruction(format!(
+                        "{pointer} = getelementptr inbounds {array_type}, ptr {storage}, i32 0, i32 {}",
+                        index.repr
+                    ));
+                    Variable {
+                        ty: element_type,
+                        pointer,
+                    }
+                };
                 let temp = self.temp();
                 self.instruction(format!(
                     "{temp} = load {}, ptr {}",

@@ -74,6 +74,38 @@ draw {}
 }
 
 #[test]
+fn indexed_aggregate_rvalues_are_materialized_safely() {
+    let source = r#"game "Rvalue Index"
+struct Level { positions: [i32; 2] }
+fn make_level() -> Level {
+    return Level { positions: [7, 9] }
+}
+start {
+    let index: i32 = 1
+    print_i32(make_level().positions[index])
+}
+update(dt: f32) {}
+draw {}
+"#;
+    let ir = speck::compile_to_llvm(source).expect("aggregate rvalue indexing should compile");
+    assert!(ir.contains("alloca [2 x i32]"));
+    assert!(ir.contains("getelementptr inbounds [2 x i32]"));
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let work = root.join("target/aggregate_rvalue_index");
+    fs::create_dir_all(&work).expect("rvalue index directory should exist");
+    let path = work.join("rvalue_index.spk");
+    fs::write(&path, source).expect("rvalue index source should be written");
+    let executable = build_in(&work, &path);
+    let run = Command::new(executable)
+        .current_dir(&work)
+        .output()
+        .expect("rvalue index example should start");
+    assert_success("aggregate rvalue indexing", &run);
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "9\n");
+}
+
+#[test]
 fn malformed_nested_initializers_are_diagnosed() {
     assert_error(
         r#"game "Bad"
