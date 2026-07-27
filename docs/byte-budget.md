@@ -46,6 +46,23 @@ size build/array_values
 nm -S --size-sort build/crumb_ppm_crumb.o
 ```
 
+## Value-struct slice measurement
+
+On the same 2026-07-27 Linux host, `framebuffer_rect.spk` remained **6,640
+bytes** after adding named value structs. The new `platform_value.spk` example
+declares a four-`i32` record, stores a constant and mutable copy, passes and
+returns it by value, mutates a field, and draws it; the stripped executable is
+**6,912 bytes**. The delta is generated example behavior, not a struct runtime:
+the implementation adds no CRuMB function, allocator, reflection table, or
+object header.
+
+```sh
+cargo run --quiet -- build examples/platform_value.spk
+wc -c build/platform_value
+size build/platform_value
+llvm-as build/platform_value.ll -o /tmp/platform_value.bc
+```
+
 ## Measured macOS ARM64 artifact
 
 On the audited macOS 26.5.2 ARM64 host, the native Cocoa build of

@@ -6,7 +6,9 @@ begins a line comment.
 
 ```text
 program       = "game" string ";"? declaration* EOF ;
-declaration   = constant | global | function | start | update | draw ;
+declaration   = struct | constant | global | function | start | update | draw ;
+struct        = "struct" identifier "{" struct_field* "}" ;
+struct_field  = identifier ":" value_type ","? ;
 constant      = "const" identifier ":" value_type "=" expression ";"? ;
 global        = "let" identifier ":" value_type "=" expression ";"? ;
 function      = "fn" identifier "(" parameters? ")" "->" return_type block ;
@@ -15,7 +17,7 @@ parameter     = identifier ":" value_type ;
 start         = "start" block ;
 update        = "update" "(" identifier ":" value_type ")" block ;
 draw          = "draw" block ;
-value_type    = "i32" | "f32" | "bool"
+value_type    = "i32" | "f32" | "bool" | identifier
               | "[" value_type ";" array_length "]" ;
 array_length  = integer | identifier ;
 return_type   = value_type | "void" ;
@@ -38,13 +40,15 @@ comparison    = term (("<" | "<=" | ">" | ">=") term)* ;
 term          = factor (("+" | "-") factor)* ;
 factor        = unary (("*" | "/") unary)* ;
 unary         = ("-" | "!") unary | postfix ;
-postfix       = primary ("[" expression "]")* ;
+postfix       = primary (("[" expression "]") | ("." identifier))* ;
 primary       = integer | float | "true" | "false"
               | "[" (expression ("," expression)* ","?)? "]"
+              | identifier "{" field_initializer* "}"
               | identifier | identifier "(" arguments? ")"
               | ("i32" | "f32") "(" arguments? ")"
               | "(" expression ")" ;
 arguments     = expression ("," expression)* ;
+field_initializer = identifier ":" expression ","? ;
 ```
 
 `i32(...)` and `f32(...)` are conversion expressions, not function calls.
@@ -54,9 +58,9 @@ conversion. The lexer uses longest-match rules for `+=`, `-=`, `*=`, `/=`,
 
 ## Types and functions
 
-Speck's scalar value types are `i32`, `f32`, and `bool`. Fixed arrays are also
-value types as described below. Variables, constants, and parameters always
-declare a type. There are no implicit
+Speck's scalar value types are `i32`, `f32`, and `bool`. Fixed arrays and
+declared struct names are also value types as described below. Variables,
+constants, and parameters always declare a type. There are no implicit
 conversions, so this is invalid:
 
 ```text
@@ -86,6 +90,53 @@ a sentinel result for effect-only work.
 Every game declares exactly one `start`, `update(dt: f32)`, and `draw` block.
 These lifecycle blocks are implicitly effect-only and do not use a return-type
 annotation. CRuMB calls them; Speck source does not declare `main`.
+
+## Struct-like value records
+
+A `struct` declaration introduces one named, fixed-layout value type:
+
+```text
+struct Platform {
+    x: i32
+    y: i32
+    width: i32
+    height: i32
+}
+
+let platform: Platform = Platform {
+    height: 5,
+    width: 60,
+    y: 140,
+    x: 40
+}
+```
+
+Field layout follows declaration order. Literal initializer order does not
+matter, but every field must appear exactly once with its declared type.
+Unknown, duplicate, and missing initializers are errors. Struct declarations
+are collected module-wide, field names must be unique within a declaration,
+and unknown or directly/indirectly recursive value types are rejected.
+
+Structs have value semantics and fixed native storage. Assignment copies the
+complete value. Passing a struct to a function gives the callee a value copy,
+and this implementation also supports returning a struct by value:
+
+```text
+fn moved(value: Platform) -> Platform {
+    value.x += 5
+    return value
+}
+```
+
+Reading `platform.x` produces the field value. Writing `platform.x = 10` or
+`platform.x += 1` changes the field inside that mutable struct variable.
+Writing any field path rooted in `const` is rejected. There are no methods,
+constructors, classes, inheritance, interfaces, traits, visibility rules,
+references, identity, reflection metadata, or dynamic dispatch.
+
+This struct-only slice deliberately keeps aggregate composition for the next
+stacked change: arrays of structs and aggregate-valued struct fields are
+diagnosed rather than partially accepted here.
 
 ## Fixed-size arrays and indexing
 
@@ -176,10 +227,10 @@ conversions are diagnosed at the initializer.
 Dependencies are evaluated after all constant names have been collected.
 Cycles are rejected with the participating names in dependency order.
 Short-circuiting also applies during constant evaluation, so an unreachable
-right operand is not evaluated. Constants are inlined into LLVM; they create no
-mutable storage and need no runtime initialization. Scalar constants are
-inlined directly. Constant arrays use read-only aggregate storage so dynamic
-indexing still has a stable native address.
+right operand is not evaluated. Constants need no runtime initialization.
+Scalar constants are inlined directly. Constant arrays and structs use
+read-only aggregate storage so indexed or field access still has a stable
+native address.
 
 Mutable top-level `let` initializers use the same compile-time expression rules
 and may reference constants, but not another mutable global. Locals remain
@@ -207,7 +258,8 @@ x += velocity * dt
 frames += 1
 ```
 
-The target must be a mutable local, parameter, global, or indexed element path.
+The target must be a mutable local, parameter, global, indexed element path, or
+struct field path.
 The target and right operand must have the same numeric type; no conversion is
 inserted. The right expression is evaluated once, and the result is stored
 back. Constants and Boolean values cannot be compound-assignment targets.

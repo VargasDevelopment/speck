@@ -27,15 +27,23 @@ linking live in `toolchain.rs`, keeping the emitter independent of LLVM's API.
 A future library-based backend can therefore replace the emitter without
 changing parsing or semantics.
 
-The validated AST distinguishes `ValueType` (scalars and fixed arrays) from
-`ReturnType` (a value type or `void`). Array lengths retain their source form
-until semantic analysis resolves positive literals and `i32` constants.
+The validated AST distinguishes `ValueType` (scalars, named structs, and fixed
+arrays) from `ReturnType` (a value type or `void`). Array lengths retain their
+source form until semantic analysis resolves positive literals and `i32`
+constants.
 Semantic analysis collects constant, global, and function names before checking
 bodies. A small dependency-walking constant evaluator annotates top-level
 constants and mutable-global initializers with scalar or aggregate values,
 detects cycles and checked-expression errors, and lets LLVM emit native
 initializers. This remains small enough that a separate HIR would duplicate
 rather than simplify the pipeline.
+
+Struct declarations are collected before value and function checking, so type
+use and literals can refer forward within the module. Compiler-only metadata
+keeps each field's source name, type, and declaration index. A graph walk
+rejects recursive value layout. Literal checking builds a name-to-initializer
+view for duplicate, missing, and unknown diagnostics while LLVM emission always
+uses declaration order.
 
 Boolean `&&` and `||` lower directly to branches and merge phi nodes. Numeric
 compound assignment lowers to one target load, one right-expression evaluation,
@@ -46,12 +54,20 @@ the conversion. User functions and all effect-only CRuMB declarations emit
 actual LLVM `void`, `call void`, and `ret void` forms.
 
 Assignment targets now retain expression structure. Semantic lvalue validation
-walks from an indexed element back to its root binding, carries the element type
-and root mutability forward, and rejects non-addressable expressions or any
-write rooted in `const`. LLVM lowering performs the same validated path walk to
-produce a pointer. Fixed arrays lower to ordinary `[N x T]` LLVM values and
-storage; local literals use `insertvalue`, globals use native aggregate
-initializers, and element addresses use `getelementptr`.
+walks from an indexed element or struct field back to its root binding, carries
+the selected type and root mutability forward, and rejects non-addressable
+expressions or any write rooted in `const`. LLVM lowering performs the same
+validated path walk to produce a pointer. Fixed arrays lower to ordinary
+`[N x T]` LLVM values and storage; local literals use `insertvalue`, globals use
+native aggregate initializers, and element addresses use `getelementptr`.
+
+Named records lower to LLVM named aggregate types such as
+`%spk_struct_Platform = type { i32, i32, i32, i32 }`. Locals and globals use
+that value type directly. Field lvalues use their declaration index in
+`getelementptr`, and field reads from returned rvalues use `extractvalue`.
+Function parameters and returns carry the aggregate by value in the generated
+LLVM signature. No target size, alignment, or data layout is hard-coded; the
+host-selected Clang remains authoritative.
 
 Each dynamic array access emits signed nonnegative and upper-bound comparisons.
 The valid branch alone executes an `inbounds getelementptr`; the failure branch

@@ -5,6 +5,7 @@ pub enum ValueType {
     I32,
     F32,
     Bool,
+    Struct(String),
     Array {
         element: Box<ValueType>,
         length: ArrayLength,
@@ -17,6 +18,7 @@ impl ValueType {
             Self::I32 => "i32".into(),
             Self::F32 => "f32".into(),
             Self::Bool => "bool".into(),
+            Self::Struct(name) => name.clone(),
             Self::Array { element, length } => {
                 format!("[{}; {}]", element.name(), length.display())
             }
@@ -95,6 +97,10 @@ pub enum ConstantValue {
     I32(i32),
     F32(f32),
     Bool(bool),
+    Struct {
+        name: String,
+        fields: Vec<(String, ConstantValue)>,
+    },
     Array {
         element_type: Box<ValueType>,
         elements: Vec<ConstantValue>,
@@ -107,6 +113,7 @@ impl ConstantValue {
             Self::I32(_) => ValueType::I32,
             Self::F32(_) => ValueType::F32,
             Self::Bool(_) => ValueType::Bool,
+            Self::Struct { name, .. } => ValueType::Struct(name.clone()),
             Self::Array {
                 element_type,
                 elements,
@@ -122,9 +129,24 @@ impl ConstantValue {
 pub struct Program {
     pub title: String,
     pub title_span: Span,
+    pub structs: Vec<StructDecl>,
     pub constants: Vec<Constant>,
     pub globals: Vec<Global>,
     pub functions: Vec<Function>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StructDecl {
+    pub name: String,
+    pub fields: Vec<StructField>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StructField {
+    pub name: String,
+    pub ty: ValueType,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -215,10 +237,19 @@ pub enum ExprKind {
     F32(f32),
     Bool(bool),
     ArrayLiteral(Vec<Expr>),
+    StructLiteral {
+        name: String,
+        fields: Vec<FieldInitializer>,
+    },
     Variable(String),
     Index {
         base: Box<Expr>,
         index: Box<Expr>,
+    },
+    Field {
+        base: Box<Expr>,
+        name: String,
+        name_span: Span,
     },
     Unary {
         op: UnaryOp,
@@ -237,6 +268,13 @@ pub enum ExprKind {
         target: ValueType,
         args: Vec<Expr>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldInitializer {
+    pub name: String,
+    pub value: Expr,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,8 +1,10 @@
+use std::collections::HashSet;
 use std::mem::discriminant;
 
 use crate::ast::{
-    ArrayLength, AssignOp, BinaryOp, Block, Constant, Expr, ExprKind, Function, FunctionKind,
-    Global, Param, Program, ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
+    ArrayLength, AssignOp, BinaryOp, Block, Constant, Expr, ExprKind, FieldInitializer, Function,
+    FunctionKind, Global, Param, Program, ReturnType, Stmt, StmtKind, StructDecl, StructField,
+    UnaryOp, ValueType,
 };
 use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::{Token, TokenKind};
@@ -14,11 +16,28 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, Vec<Diagnostic>> {
 struct Parser {
     tokens: Vec<Token>,
     cursor: usize,
+    struct_names: HashSet<String>,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, cursor: 0 }
+        let struct_names = tokens
+            .windows(2)
+            .filter_map(|window| {
+                if matches!(window[0].kind, TokenKind::Struct)
+                    && let TokenKind::Identifier(name) = &window[1].kind
+                {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        Self {
+            tokens,
+            cursor: 0,
+            struct_names,
+        }
     }
 
     fn run(mut self) -> Result<Program, Diagnostic> {
@@ -32,11 +51,14 @@ impl Parser {
         };
         self.take(&TokenKind::Semicolon);
 
+        let mut structs = Vec::new();
         let mut constants = Vec::new();
         let mut globals = Vec::new();
         let mut functions = Vec::new();
         while !self.at(&TokenKind::Eof) {
-            if self.at(&TokenKind::Const) {
+            if self.at(&TokenKind::Struct) {
+                structs.push(self.parse_struct()?);
+            } else if self.at(&TokenKind::Const) {
                 constants.push(self.parse_constant()?);
             } else if self.at(&TokenKind::Let) {
                 globals.push(self.parse_global()?);
@@ -50,7 +72,7 @@ impl Parser {
                 functions.push(self.parse_named_function()?);
             } else {
                 return Err(self.error_here(
-                    "expected a top-level `const`, `let`, `fn`, `start`, `update`, or `draw` declaration",
+                    "expected a top-level `struct`, `const`, `let`, `fn`, `start`, `update`, or `draw` declaration",
                 ));
             }
         }
@@ -58,9 +80,36 @@ impl Parser {
         Ok(Program {
             title,
             title_span: title_token.span,
+            structs,
             constants,
             globals,
             functions,
+        })
+    }
+
+    fn parse_struct(&mut self) -> Result<StructDecl, Diagnostic> {
+        let start = self.expect(&TokenKind::Struct, "expected `struct`")?.span;
+        let (name, _) = self.identifier("expected a struct name")?;
+        self.expect(&TokenKind::LeftBrace, "expected `{` after the struct name")?;
+        let mut fields = Vec::new();
+        while !self.at(&TokenKind::RightBrace) && !self.at(&TokenKind::Eof) {
+            let (field_name, field_span) = self.identifier("expected a field name")?;
+            self.expect(&TokenKind::Colon, "expected `:` after field name")?;
+            let ty = self.parse_value_type()?;
+            fields.push(StructField {
+                name: field_name,
+                ty,
+                span: field_span,
+            });
+            self.take(&TokenKind::Comma);
+        }
+        let end = self
+            .expect(&TokenKind::RightBrace, "expected `}` after struct fields")?
+            .span;
+        Ok(StructDecl {
+            name,
+            fields,
+            span: start.merge(end),
         })
     }
 
@@ -198,6 +247,7 @@ impl Parser {
             TokenKind::I32 => Ok(ValueType::I32),
             TokenKind::F32 => Ok(ValueType::F32),
             TokenKind::Bool => Ok(ValueType::Bool),
+            TokenKind::Identifier(name) => Ok(ValueType::Struct(name)),
             TokenKind::LeftBracket => {
                 let element = self.parse_value_type()?;
                 self.expect(
@@ -246,7 +296,7 @@ impl Parser {
                 token.span,
             )),
             _ => Err(Diagnostic::new(
-                "expected type `i32`, `f32`, `bool`, or a fixed array type",
+                "expected a scalar, struct, or fixed array type",
                 token.span,
             )),
         }
@@ -500,19 +550,34 @@ impl Parser {
 
     fn postfix(&mut self) -> Result<Expr, Diagnostic> {
         let mut expression = self.primary()?;
-        while self.take(&TokenKind::LeftBracket) {
-            let index = self.expression()?;
-            let end = self
-                .expect(&TokenKind::RightBracket, "expected `]` after array index")?
-                .span;
-            let span = expression.span.merge(end);
-            expression = Expr {
-                kind: ExprKind::Index {
-                    base: Box::new(expression),
-                    index: Box::new(index),
-                },
-                span,
-            };
+        loop {
+            if self.take(&TokenKind::LeftBracket) {
+                let index = self.expression()?;
+                let end = self
+                    .expect(&TokenKind::RightBracket, "expected `]` after array index")?
+                    .span;
+                let span = expression.span.merge(end);
+                expression = Expr {
+                    kind: ExprKind::Index {
+                        base: Box::new(expression),
+                        index: Box::new(index),
+                    },
+                    span,
+                };
+            } else if self.take(&TokenKind::Dot) {
+                let (name, name_span) = self.identifier("expected a field name after `.`")?;
+                let span = expression.span.merge(name_span);
+                expression = Expr {
+                    kind: ExprKind::Field {
+                        base: Box::new(expression),
+                        name,
+                        name_span,
+                    },
+                    span,
+                };
+            } else {
+                break;
+            }
         }
         Ok(expression)
     }
@@ -554,6 +619,9 @@ impl Parser {
                 })
             }
             TokenKind::Identifier(name) => {
+                if self.looks_like_struct_literal(&name) {
+                    return self.struct_literal(name, token.span);
+                }
                 if !self.take(&TokenKind::LeftParen) {
                     return Ok(Expr {
                         kind: ExprKind::Variable(name),
@@ -592,6 +660,47 @@ impl Parser {
             }
             _ => Err(Diagnostic::new("expected an expression", token.span)),
         }
+    }
+
+    fn struct_literal(&mut self, name: String, start: Span) -> Result<Expr, Diagnostic> {
+        self.expect(&TokenKind::LeftBrace, "expected `{` after struct type name")?;
+        let mut fields = Vec::new();
+        while !self.at(&TokenKind::RightBrace) && !self.at(&TokenKind::Eof) {
+            let (field_name, field_start) = self.identifier("expected a field initializer name")?;
+            self.expect(
+                &TokenKind::Colon,
+                "expected `:` after field initializer name",
+            )?;
+            let value = self.expression()?;
+            let span = field_start.merge(value.span);
+            fields.push(FieldInitializer {
+                name: field_name,
+                value,
+                span,
+            });
+            self.take(&TokenKind::Comma);
+        }
+        let end = self
+            .expect(&TokenKind::RightBrace, "expected `}` after struct literal")?
+            .span;
+        Ok(Expr {
+            kind: ExprKind::StructLiteral { name, fields },
+            span: start.merge(end),
+        })
+    }
+
+    fn looks_like_struct_literal(&self, name: &str) -> bool {
+        if !self.at(&TokenKind::LeftBrace) {
+            return false;
+        }
+        self.struct_names.contains(name)
+            || matches!(
+                (
+                    self.tokens.get(self.cursor + 1).map(|token| &token.kind),
+                    self.tokens.get(self.cursor + 2).map(|token| &token.kind)
+                ),
+                (Some(TokenKind::Identifier(_)), Some(TokenKind::Colon))
+            )
     }
 
     fn arguments(&mut self) -> Result<(Vec<Expr>, Span), Diagnostic> {
@@ -762,6 +871,36 @@ draw {}
             StmtKind::Assign {
                 target: Expr {
                     kind: ExprKind::Index { .. },
+                    ..
+                },
+                op: AssignOp::Add,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parses_struct_declarations_literals_fields_and_field_assignment() {
+        let program = parse_source(
+            r#"game "Structs"
+struct Point { x: i32, y: i32 }
+let point: Point = Point { y: 2, x: 1 }
+start { let x: i32 = point.x point.y += x }
+update(dt: f32) {}
+draw {}
+"#,
+        );
+        assert_eq!(program.structs[0].name, "Point");
+        assert_eq!(program.structs[0].fields.len(), 2);
+        assert!(matches!(
+            program.globals[0].init.kind,
+            ExprKind::StructLiteral { .. }
+        ));
+        assert!(matches!(
+            program.functions[0].body[1].kind,
+            StmtKind::Assign {
+                target: Expr {
+                    kind: ExprKind::Field { .. },
                     ..
                 },
                 op: AssignOp::Add,
