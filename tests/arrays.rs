@@ -64,6 +64,9 @@ fn array_diagnostics_cover_shape_types_bounds_and_mutability() {
 fn constant_lengths_and_constant_indices_are_resolved() {
     let source = r#"game "Constants"
 const TWO: i32 = 1 + 1
+const FROM_ARRAY: i32 = SOURCE[0]
+const DERIVED: [i32; FROM_ARRAY] = [3, 5]
+const SOURCE: [i32; 1] = [TWO]
 const VALUES: [i32; TWO] = [7, 9]
 start { print_i32(VALUES[TWO - 1]) }
 update(dt: f32) {}
@@ -71,10 +74,19 @@ draw {}
 "#;
     let ir = speck::compile_to_llvm(source).expect("constant-sized array should compile");
     assert!(ir.contains("@spk_const_VALUES = internal constant [2 x i32]"));
+    assert!(ir.contains("@spk_const_DERIVED = internal constant [2 x i32]"));
 
     assert_error(
         "game \"Bad\"\nconst TWO: i32 = 2\nconst VALUES: [i32; TWO] = [7, 9]\nstart { print_i32(VALUES[TWO]) }\nupdate(dt: f32) {}\ndraw {}\n",
         "constant index 2 is out of bounds for length 2",
+    );
+}
+
+#[test]
+fn aggregate_equality_is_rejected_before_llvm_lowering() {
+    assert_error(
+        "game \"Bad\"\nlet a: [i32; 2] = [1, 2]\nlet b: [i32; 2] = [1, 2]\nstart { let same: bool = a == b }\nupdate(dt: f32) {}\ndraw {}\n",
+        "equality comparison requires scalar operands",
     );
 }
 

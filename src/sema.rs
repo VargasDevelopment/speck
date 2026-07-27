@@ -308,7 +308,7 @@ struct LengthConstantDefinition {
 
 struct LengthConstantEvaluator {
     definitions: HashMap<String, LengthConstantDefinition>,
-    values: HashMap<String, i32>,
+    values: HashMap<String, ConstantValue>,
     visiting: Vec<String>,
 }
 
@@ -331,18 +331,39 @@ impl LengthConstantEvaluator {
                 .collect(),
             values: builtins::CONSTANTS
                 .iter()
-                .filter_map(|constant| match constant.value {
-                    ConstantValue::I32(value) => Some((constant.name.to_owned(), value)),
-                    _ => None,
-                })
+                .map(|constant| (constant.name.to_owned(), constant.value.clone()))
                 .collect(),
             visiting: Vec::new(),
         }
     }
 
     fn evaluate(&mut self, name: &str, usage_span: Span) -> Result<i32, Diagnostic> {
+        if self
+            .definitions
+            .get(name)
+            .is_some_and(|definition| definition.ty != ValueType::I32)
+        {
+            return Err(Diagnostic::new(
+                format!("array length constant `{name}` must have type `i32`"),
+                usage_span,
+            ));
+        }
+        match self.evaluate_value(name, usage_span)? {
+            ConstantValue::I32(value) => Ok(value),
+            _ => Err(Diagnostic::new(
+                format!("array length constant `{name}` must evaluate to `i32`"),
+                usage_span,
+            )),
+        }
+    }
+
+    fn evaluate_value(
+        &mut self,
+        name: &str,
+        usage_span: Span,
+    ) -> Result<ConstantValue, Diagnostic> {
         if let Some(value) = self.values.get(name) {
-            return Ok(*value);
+            return Ok(value.clone());
         }
         let Some(definition) = self.definitions.get(name).cloned() else {
             return Err(Diagnostic::new(
@@ -350,12 +371,6 @@ impl LengthConstantEvaluator {
                 usage_span,
             ));
         };
-        if definition.ty != ValueType::I32 {
-            return Err(Diagnostic::new(
-                format!("array length constant `{name}` must have type `i32`"),
-                usage_span,
-            ));
-        }
         if let Some(start) = self.visiting.iter().position(|item| item == name) {
             let mut cycle = self.visiting[start..].to_vec();
             cycle.push(name.to_owned());
@@ -366,21 +381,29 @@ impl LengthConstantEvaluator {
         }
 
         self.visiting.push(name.to_owned());
-        let result = evaluate_expression(&definition.init, |dependency| {
-            self.evaluate(dependency, definition.init.span)
-                .map(ConstantValue::I32)
-        });
-        self.visiting.pop();
-        let value = match result? {
-            ConstantValue::I32(value) => value,
-            _ => {
-                return Err(Diagnostic::new(
-                    format!("array length constant `{name}` must evaluate to `i32`"),
-                    usage_span,
-                ));
-            }
+        let mut ty = definition.ty.clone();
+        let mut diagnostics = Vec::new();
+        resolve_value_type(&mut ty, self, &mut diagnostics);
+        let result = if let Some(diagnostic) = diagnostics.into_iter().next() {
+            Err(diagnostic)
+        } else {
+            evaluate_typed_expression(&definition.init, &ty, |dependency| {
+                self.evaluate_value(dependency, definition.init.span)
+            })
         };
-        self.values.insert(name.to_owned(), value);
+        self.visiting.pop();
+        let value = result?;
+        if value.ty() != ty {
+            return Err(Diagnostic::new(
+                format!(
+                    "constant `{name}` has declared type `{}`, but its initializer evaluates to `{}`",
+                    ty.name(),
+                    value.ty().name()
+                ),
+                definition.init.span,
+            ));
+        }
+        self.values.insert(name.to_owned(), value.clone());
         Ok(value)
     }
 }
@@ -942,7 +965,17 @@ impl<'a> FunctionChecker<'a> {
                             None
                         }
                     }
-                    BinaryOp::Equal | BinaryOp::NotEqual => Some(ValueType::Bool.into()),
+                    BinaryOp::Equal | BinaryOp::NotEqual => {
+                        if matches!(left_type, ValueType::I32 | ValueType::F32 | ValueType::Bool) {
+                            Some(ValueType::Bool.into())
+                        } else {
+                            self.error(
+                                "equality comparison requires scalar operands",
+                                expression.span,
+                            );
+                            None
+                        }
+                    }
                     BinaryOp::LogicalAnd | BinaryOp::LogicalOr => unreachable!(),
                 }
             }
