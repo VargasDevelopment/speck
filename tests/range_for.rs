@@ -129,12 +129,18 @@ start {
     let Limit: i32 = 2
     for i in 0..Limit { print_i32(i) }
     print_to(3)
+    for Limit in 0..2 {
+        for j in 0..Limit { print_i32(j) }
+    }
 }
 update(dt: f32) {}
 draw {}
 "#,
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "0\n1\n0\n1\n2\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "0\n1\n0\n1\n2\n0\n"
+    );
 }
 
 #[test]
