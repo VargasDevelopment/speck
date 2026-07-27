@@ -63,6 +63,30 @@ size build/platform_value
 llvm-as build/platform_value.ll -o /tmp/platform_value.bc
 ```
 
+## Aggregate-composition slice measurement
+
+On the same 2026-07-27 Linux host, `framebuffer_rect.spk` again remained
+**6,640 bytes** after enabling arrays and structs to nest. The infrastructure
+example `platform_array.spk` stores three seven-`i32` platform records in a
+constant array, traverses them with the existing `while` loop, passes each
+indexed value to a function, and draws it. Its stripped executable is **6,768
+bytes**.
+
+Composition adds no CRuMB function or data structure. LLVM represents the
+records and arrays directly, and the executable delta reflects the example's
+generated drawing loop and referenced bounds-failure path. The measurement was
+collected with:
+
+```sh
+cargo run --quiet -- build examples/framebuffer_rect.spk
+wc -c build/framebuffer_rect
+
+cargo run --quiet -- build examples/platform_array.spk
+wc -c build/platform_array
+size build/platform_array
+llvm-as build/platform_array.ll -o /tmp/platform_array.bc
+```
+
 ## Measured macOS ARM64 artifact
 
 On the audited macOS 26.5.2 ARM64 host, the native Cocoa build of

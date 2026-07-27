@@ -568,30 +568,20 @@ fn validate_declared_types(
     for declaration in &program.structs {
         for field in &declaration.fields {
             validate_known_type(&field.ty, field.span, structs, diagnostics);
-            if matches!(field.ty, ValueType::Array { .. } | ValueType::Struct(_)) {
-                diagnostics.push(Diagnostic::new(
-                    "aggregate-valued struct fields are added by the aggregate-composition slice",
-                    field.span,
-                ));
-            }
         }
     }
     for constant in &program.constants {
         validate_known_type(&constant.ty, constant.span, structs, diagnostics);
-        reject_struct_array_composition(&constant.ty, constant.span, diagnostics);
     }
     for global in &program.globals {
         validate_known_type(&global.ty, global.span, structs, diagnostics);
-        reject_struct_array_composition(&global.ty, global.span, diagnostics);
     }
     for function in &program.functions {
         for param in &function.params {
             validate_known_type(&param.ty, param.span, structs, diagnostics);
-            reject_struct_array_composition(&param.ty, param.span, diagnostics);
         }
         if let ReturnType::Value(ty) = &function.return_type {
             validate_known_type(ty, function.span, structs, diagnostics);
-            reject_struct_array_composition(ty, function.span, diagnostics);
         }
         validate_block_types(&function.body, structs, diagnostics);
     }
@@ -606,7 +596,6 @@ fn validate_block_types(
         match &statement.kind {
             StmtKind::Let { ty, .. } => {
                 validate_known_type(ty, statement.span, structs, diagnostics);
-                reject_struct_array_composition(ty, statement.span, diagnostics);
             }
             StmtKind::If {
                 then_block,
@@ -640,26 +629,6 @@ fn validate_known_type(
             validate_known_type(element, span, structs, diagnostics);
         }
         ValueType::I32 | ValueType::F32 | ValueType::Bool | ValueType::Struct(_) => {}
-    }
-}
-
-fn reject_struct_array_composition(ty: &ValueType, span: Span, diagnostics: &mut Vec<Diagnostic>) {
-    if let ValueType::Array { element, .. } = ty {
-        if contains_struct_type(element) {
-            diagnostics.push(Diagnostic::new(
-                "arrays of structs are added by the aggregate-composition slice",
-                span,
-            ));
-        }
-        reject_struct_array_composition(element, span, diagnostics);
-    }
-}
-
-fn contains_struct_type(ty: &ValueType) -> bool {
-    match ty {
-        ValueType::Struct(_) => true,
-        ValueType::Array { element, .. } => contains_struct_type(element),
-        ValueType::I32 | ValueType::F32 | ValueType::Bool => false,
     }
 }
 

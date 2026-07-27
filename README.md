@@ -46,6 +46,10 @@ cargo run -- build examples/array_values.spk
 cargo run -- build examples/platform_value.spk
 ./build/platform_value
 
+# Arrays and structs composed as allocation-free level data
+cargo run -- build examples/platform_array.spk
+./build/platform_array
+
 # Infrastructure-only framebuffer verification
 cargo run -- build examples/framebuffer_rect.spk
 ./build/framebuffer_rect
@@ -119,7 +123,8 @@ This is an honest small compiler/runtime slice, not a general-purpose language
 or a finished tiny-game platform. There is no heap, garbage collector, audio,
 dynamic arrays, slices, modules, or asset system. Fixed-size explicitly typed
 arrays use native value storage and checked `i32` indexing. Named structs are
-fixed-layout values with no object runtime. Input is limited to eleven fixed
+fixed-layout values with no object runtime; the two aggregate forms compose
+recursively for allocation-free level data. Input is limited to eleven fixed
 digital keys;
 there is no mouse, controller, text entry, rebinding, or arbitrary key
 enumeration. Graphics are currently limited to clearing the software

@@ -134,10 +134,6 @@ Writing any field path rooted in `const` is rejected. There are no methods,
 constructors, classes, inheritance, interfaces, traits, visibility rules,
 references, identity, reflection metadata, or dynamic dispatch.
 
-This struct-only slice deliberately keeps aggregate composition for the next
-stacked change: arrays of structs and aggregate-valued struct fields are
-diagnosed rather than partially accepted here.
-
 ## Fixed-size arrays and indexing
 
 An array type names its element type and fixed compile-time length:
@@ -180,6 +176,57 @@ can fold away checks for constant valid indices.
 
 Writing through an indexed path requires a mutable root. A path rooted in an
 immutable `const` array is rejected. Reading an element produces a value.
+
+## Aggregate composition
+
+Arrays may contain structs, and struct fields may contain fixed arrays or other
+non-recursive structs. Postfix access is composable, so reads and writes may
+alternate indexing and field selection:
+
+```text
+struct Platform {
+    x: i32
+    width: i32
+}
+
+struct Level {
+    platforms: [Platform; 2]
+    positions: [i32; 2]
+}
+
+let levels: [Level; 1] = [
+    Level {
+        platforms: [
+            Platform { x: 10, width: 20 },
+            Platform { x: 40, width: 30 }
+        ],
+        positions: [0, 0]
+    }
+]
+
+levels[0].platforms[1].x += 2
+levels[0].positions[0] = 50
+```
+
+Every aggregate remains a value. In:
+
+```text
+let copy: Platform = levels[0].platforms[0]
+copy.x = 99
+```
+
+the indexed read copies the `Platform`, so changing `copy` does not change
+`levels`. By contrast, `levels[0].platforms[0].x = 99` follows one lvalue path
+into the mutable global and changes the stored field. The root binding controls
+mutability for the complete path; no path rooted in a `const` value may be
+written.
+
+Compile-time initialization recursively accepts scalar constants, array
+literals, and struct literals. This permits immutable level data such as
+`const PLATFORMS: [Platform; 3] = [...]` without a runtime constructor. Nested
+fixed arrays also remain supported where their explicitly declared types
+match. Aggregate composition adds no references, aliases, hidden identity,
+runtime metadata, allocation, or heap.
 
 ## Explicit numeric conversions
 

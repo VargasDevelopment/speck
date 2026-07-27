@@ -1,0 +1,68 @@
+game "Platform Array"
+
+struct Platform {
+    x: i32
+    y: i32
+    width: i32
+    height: i32
+    red: i32
+    green: i32
+    blue: i32
+}
+
+const PLATFORM_COUNT: i32 = 3
+
+const PLATFORMS: [Platform; PLATFORM_COUNT] = [
+    Platform {
+        x: 40,
+        y: 140,
+        width: 60,
+        height: 5,
+        red: 255,
+        green: 255,
+        blue: 255
+    },
+    Platform {
+        x: 150,
+        y: 105,
+        width: 50,
+        height: 5,
+        red: 255,
+        green: 255,
+        blue: 255
+    },
+    Platform {
+        x: 240,
+        y: 70,
+        width: 40,
+        height: 5,
+        red: 255,
+        green: 255,
+        blue: 255
+    }
+]
+
+fn draw_platform(platform: Platform) -> void {
+    fill_rect(
+        platform.x,
+        platform.y,
+        platform.width,
+        platform.height,
+        platform.red,
+        platform.green,
+        platform.blue
+    )
+}
+
+start {}
+
+update(dt: f32) {}
+
+draw {
+    clear_rgb(32, 18, 32)
+    let index: i32 = 0
+    while index < PLATFORM_COUNT {
+        draw_platform(PLATFORMS[index])
+        index += 1
+    }
+}
