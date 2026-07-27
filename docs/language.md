@@ -6,7 +6,9 @@ begins a line comment.
 
 ```text
 program       = "game" string ";"? declaration* EOF ;
-declaration   = constant | global | function | start | update | draw ;
+declaration   = struct | constant | global | function | start | update | draw ;
+struct        = "struct" identifier "{" struct_field* "}" ;
+struct_field  = identifier ":" value_type ","? ;
 constant      = "const" identifier ":" value_type "=" expression ";"? ;
 global        = "let" identifier ":" value_type "=" expression ";"? ;
 function      = "fn" identifier "(" parameters? ")" "->" return_type block ;
@@ -15,16 +17,21 @@ parameter     = identifier ":" value_type ;
 start         = "start" block ;
 update        = "update" "(" identifier ":" value_type ")" block ;
 draw          = "draw" block ;
-value_type    = "i32" | "f32" | "bool" ;
+value_type    = "i32" | "f32" | "bool" | identifier
+              | "[" value_type ";" array_length "]" ;
+array_length  = integer | identifier ;
 return_type   = value_type | "void" ;
 
 block         = "{" statement* "}" ;
-statement     = local | assignment | if | while | return | expression ";"? ;
+statement     = local | assignment | if | while | for | return
+              | expression ";"? ;
 local         = "let" identifier ":" value_type "=" expression ";"? ;
-assignment    = identifier ("=" | "+=" | "-=" | "*=" | "/=")
+assignment    = assignable ("=" | "+=" | "-=" | "*=" | "/=")
                 expression ";"? ;
+assignable    = postfix ;
 if            = "if" expression block ("else" block)? ;
 while         = "while" expression block ;
+for           = "for" identifier "in" expression ".." expression block ;
 return        = "return" expression? ";"? ;
 
 expression    = logical_or ;
@@ -34,23 +41,28 @@ equality      = comparison (("==" | "!=") comparison)* ;
 comparison    = term (("<" | "<=" | ">" | ">=") term)* ;
 term          = factor (("+" | "-") factor)* ;
 factor        = unary (("*" | "/") unary)* ;
-unary         = ("-" | "!") unary | primary ;
+unary         = ("-" | "!") unary | postfix ;
+postfix       = primary (("[" expression "]") | ("." identifier))* ;
 primary       = integer | float | "true" | "false"
+              | "[" (expression ("," expression)* ","?)? "]"
+              | identifier "{" field_initializer* "}"
               | identifier | identifier "(" arguments? ")"
               | ("i32" | "f32") "(" arguments? ")"
               | "(" expression ")" ;
 arguments     = expression ("," expression)* ;
+field_initializer = identifier ":" expression ","? ;
 ```
 
 `i32(...)` and `f32(...)` are conversion expressions, not function calls.
 Their type names are reserved only where the grammar already expects a type or
 conversion. The lexer uses longest-match rules for `+=`, `-=`, `*=`, `/=`,
-`<=`, `>=`, `==`, `!=`, `&&`, `||`, and `->`.
+`<=`, `>=`, `==`, `!=`, `&&`, `||`, `->`, and `..`.
 
 ## Types and functions
 
-Speck's value types are `i32`, `f32`, and `bool`. Variables, constants, and
-parameters always declare one of these types. There are no implicit
+Speck's scalar value types are `i32`, `f32`, and `bool`. Fixed arrays and
+declared struct names are also value types as described below. Variables,
+constants, and parameters always declare a type. There are no implicit
 conversions, so this is invalid:
 
 ```text
@@ -80,6 +92,143 @@ a sentinel result for effect-only work.
 Every game declares exactly one `start`, `update(dt: f32)`, and `draw` block.
 These lifecycle blocks are implicitly effect-only and do not use a return-type
 annotation. CRuMB calls them; Speck source does not declare `main`.
+
+## Struct-like value records
+
+A `struct` declaration introduces one named, fixed-layout value type:
+
+```text
+struct Platform {
+    x: i32
+    y: i32
+    width: i32
+    height: i32
+}
+
+let platform: Platform = Platform {
+    height: 5,
+    width: 60,
+    y: 140,
+    x: 40
+}
+```
+
+Field layout follows declaration order. Literal initializer order does not
+matter, but every field must appear exactly once with its declared type.
+Unknown, duplicate, and missing initializers are errors. Struct declarations
+are collected module-wide, field names must be unique within a declaration,
+and unknown or directly/indirectly recursive value types are rejected.
+
+Structs have value semantics and fixed native storage. Assignment copies the
+complete value. Passing a struct to a function gives the callee a value copy,
+and this implementation also supports returning a struct by value:
+
+```text
+fn moved(value: Platform) -> Platform {
+    value.x += 5
+    return value
+}
+```
+
+Reading `platform.x` produces the field value. Writing `platform.x = 10` or
+`platform.x += 1` changes the field inside that mutable struct variable.
+Writing any field path rooted in `const` is rejected. There are no methods,
+constructors, classes, inheritance, interfaces, traits, visibility rules,
+references, identity, reflection metadata, or dynamic dispatch.
+
+## Fixed-size arrays and indexing
+
+An array type names its element type and fixed compile-time length:
+
+```text
+const VALUE_COUNT: i32 = 4
+let values: [i32; VALUE_COUNT] = [2, 4, 6, 8]
+let flags: [bool; 3] = [true, false, true]
+```
+
+The length must be a positive integer literal or an `i32` constant. Array
+declarations require an explicit type annotation; array literals are not
+generally inferred. A literal must contain exactly the declared number of
+elements, and every element must exactly match the element type. Nested fixed
+arrays follow from the type grammar and use repeated indexing such as
+`matrix[row][column]`; there is no separate multidimensional-array runtime.
+
+Arrays use ordinary value storage. Locals live in function storage, mutable
+globals use fixed LLVM globals, and immutable aggregate constants use
+read-only LLVM global storage. No array object, length header, heap allocation,
+or garbage collector is involved. Whole-array assignment between values of
+the same array type copies the complete value. Arrays are not yet accepted as
+function parameter or return types.
+
+Index expressions accept only `i32`:
+
+```text
+let selected: i32 = values[index]
+values[index] = 40
+values[index] += 2
+```
+
+A compile-time-known index outside `0..length` is rejected. Every runtime index
+is checked for both a negative value and a value at or above the length before
+LLVM emits an in-bounds element address. Failure calls the narrow
+`crumb_bounds_fail(index, length)` runtime function, prints
+`Speck array index N is out of bounds for length L` to standard error, and exits
+with failure. There is no exception or recoverable panic value. LLVM and Clang
+can fold away checks for constant valid indices.
+
+Writing through an indexed path requires a mutable root. A path rooted in an
+immutable `const` array is rejected. Reading an element produces a value.
+
+## Aggregate composition
+
+Arrays may contain structs, and struct fields may contain fixed arrays or other
+non-recursive structs. Postfix access is composable, so reads and writes may
+alternate indexing and field selection:
+
+```text
+struct Platform {
+    x: i32
+    width: i32
+}
+
+struct Level {
+    platforms: [Platform; 2]
+    positions: [i32; 2]
+}
+
+let levels: [Level; 1] = [
+    Level {
+        platforms: [
+            Platform { x: 10, width: 20 },
+            Platform { x: 40, width: 30 }
+        ],
+        positions: [0, 0]
+    }
+]
+
+levels[0].platforms[1].x += 2
+levels[0].positions[0] = 50
+```
+
+Every aggregate remains a value. In:
+
+```text
+let copy: Platform = levels[0].platforms[0]
+copy.x = 99
+```
+
+the indexed read copies the `Platform`, so changing `copy` does not change
+`levels`. By contrast, `levels[0].platforms[0].x = 99` follows one lvalue path
+into the mutable global and changes the stored field. The root binding controls
+mutability for the complete path; no path rooted in a `const` value may be
+written.
+
+Compile-time initialization recursively accepts scalar constants, array
+literals, and struct literals. This permits immutable level data such as
+`const PLATFORMS: [Platform; 3] = [...]` without a runtime constructor. Nested
+fixed arrays also remain supported where their explicitly declared types
+match. Aggregate composition adds no references, aliases, hidden identity,
+runtime metadata, allocation, or heap.
 
 ## Explicit numeric conversions
 
@@ -127,8 +276,10 @@ conversions are diagnosed at the initializer.
 Dependencies are evaluated after all constant names have been collected.
 Cycles are rejected with the participating names in dependency order.
 Short-circuiting also applies during constant evaluation, so an unreachable
-right operand is not evaluated. Constants are inlined into LLVM; they create no
-mutable storage and need no runtime initialization.
+right operand is not evaluated. Constants need no runtime initialization.
+Scalar constants are inlined directly. Constant arrays and structs use
+read-only aggregate storage so indexed or field access still has a stable
+native address.
 
 Mutable top-level `let` initializers use the same compile-time expression rules
 and may reference constants, but not another mutable global. Locals remain
@@ -156,14 +307,39 @@ x += velocity * dt
 frames += 1
 ```
 
-The identifier must name a mutable local, parameter, or global. The target and
-right operand must have the same numeric type; no conversion is inserted. The
-right expression is evaluated once, and the result is stored back. Constants
-and Boolean values cannot be compound-assignment targets. Assignment remains a
-statement and does not produce a value.
+The target must be a mutable local, parameter, global, indexed element path, or
+struct field path.
+The target and right operand must have the same numeric type; no conversion is
+inserted. The right expression is evaluated once, and the result is stored
+back. Constants and Boolean values cannot be compound-assignment targets.
+Assignment remains a statement and does not produce a value.
 
 Locals use lexical block scope and may shadow outer names. Parameters preserve
 Speck's existing mutable behavior.
+
+## Exclusive range loops
+
+The narrow `for` statement iterates upward by exactly one over a
+lower-inclusive, upper-exclusive `i32` range:
+
+```text
+for i in 0..PLATFORM_COUNT {
+    draw_platform(PLATFORMS[i])
+}
+```
+
+The lower bound is evaluated once, then the upper bound is evaluated once,
+before the first condition check. Both must have type `i32`. The loop variable
+is a new read-only `i32` binding scoped to the loop body; it may shadow an outer
+name, and nested loops may shadow it again. Assigning or compound-assigning to
+the loop variable is an error.
+
+At each iteration Speck checks `i < upper`, runs the body when true, and then
+increments `i` by one. A lower bound greater than or equal to the upper bound
+therefore runs zero iterations. Negative bounds work normally. `..` is accepted
+only in this statement syntax: ranges are not values. There is no inclusive
+range, custom or negative step, array-item iteration, iterator protocol,
+`break`, `continue`, or loop expression.
 
 ## CRuMB functions and graphics
 

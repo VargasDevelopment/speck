@@ -1,41 +1,84 @@
 use crate::diagnostic::Span;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ValueType {
     I32,
     F32,
     Bool,
+    Struct(String),
+    Array {
+        element: Box<ValueType>,
+        length: ArrayLength,
+    },
 }
 
 impl ValueType {
-    pub const fn name(self) -> &'static str {
+    pub fn name(&self) -> String {
         match self {
-            Self::I32 => "i32",
-            Self::F32 => "f32",
-            Self::Bool => "bool",
+            Self::I32 => "i32".into(),
+            Self::F32 => "f32".into(),
+            Self::Bool => "bool".into(),
+            Self::Struct(name) => name.clone(),
+            Self::Array { element, length } => {
+                format!("[{}; {}]", element.name(), length.display())
+            }
         }
     }
 
-    pub const fn is_numeric(self) -> bool {
+    pub const fn is_numeric(&self) -> bool {
         matches!(self, Self::I32 | Self::F32)
+    }
+
+    pub fn resolved_array(&self) -> Option<(&ValueType, usize)> {
+        match self {
+            Self::Array {
+                element,
+                length: ArrayLength::Resolved(length),
+            } => Some((element, *length)),
+            _ => None,
+        }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ArrayLength {
+    Literal { value: i64, span: Span },
+    Constant { name: String, span: Span },
+    Resolved(usize),
+}
+
+impl ArrayLength {
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            Self::Literal { span, .. } | Self::Constant { span, .. } => Some(*span),
+            Self::Resolved(_) => None,
+        }
+    }
+
+    pub fn display(&self) -> String {
+        match self {
+            Self::Literal { value, .. } => value.to_string(),
+            Self::Constant { name, .. } => name.clone(),
+            Self::Resolved(value) => value.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReturnType {
     Value(ValueType),
     Void,
 }
 
 impl ReturnType {
-    pub const fn name(self) -> &'static str {
+    pub fn name(&self) -> String {
         match self {
             Self::Value(ty) => ty.name(),
-            Self::Void => "void",
+            Self::Void => "void".into(),
         }
     }
 
-    pub const fn value_type(self) -> Option<ValueType> {
+    pub fn value_type(&self) -> Option<&ValueType> {
         match self {
             Self::Value(ty) => Some(ty),
             Self::Void => None,
@@ -49,19 +92,35 @@ impl From<ValueType> for ReturnType {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ConstantValue {
     I32(i32),
     F32(f32),
     Bool(bool),
+    Struct {
+        name: String,
+        fields: Vec<(String, ConstantValue)>,
+    },
+    Array {
+        element_type: Box<ValueType>,
+        elements: Vec<ConstantValue>,
+    },
 }
 
 impl ConstantValue {
-    pub const fn ty(self) -> ValueType {
+    pub fn ty(&self) -> ValueType {
         match self {
             Self::I32(_) => ValueType::I32,
             Self::F32(_) => ValueType::F32,
             Self::Bool(_) => ValueType::Bool,
+            Self::Struct { name, .. } => ValueType::Struct(name.clone()),
+            Self::Array {
+                element_type,
+                elements,
+            } => ValueType::Array {
+                element: element_type.clone(),
+                length: ArrayLength::Resolved(elements.len()),
+            },
         }
     }
 }
@@ -70,9 +129,24 @@ impl ConstantValue {
 pub struct Program {
     pub title: String,
     pub title_span: Span,
+    pub structs: Vec<StructDecl>,
     pub constants: Vec<Constant>,
     pub globals: Vec<Global>,
     pub functions: Vec<Function>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StructDecl {
+    pub name: String,
+    pub fields: Vec<StructField>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StructField {
+    pub name: String,
+    pub ty: ValueType,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -134,7 +208,7 @@ pub enum StmtKind {
         init: Expr,
     },
     Assign {
-        name: String,
+        target: Expr,
         op: AssignOp,
         value: Expr,
     },
@@ -146,6 +220,13 @@ pub enum StmtKind {
     },
     While {
         condition: Expr,
+        body: Block,
+    },
+    For {
+        name: String,
+        name_span: Span,
+        lower: Expr,
+        upper: Expr,
         body: Block,
     },
     Return(Option<Expr>),
@@ -162,7 +243,21 @@ pub enum ExprKind {
     I32(i64),
     F32(f32),
     Bool(bool),
+    ArrayLiteral(Vec<Expr>),
+    StructLiteral {
+        name: String,
+        fields: Vec<FieldInitializer>,
+    },
     Variable(String),
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+    },
+    Field {
+        base: Box<Expr>,
+        name: String,
+        name_span: Span,
+    },
     Unary {
         op: UnaryOp,
         operand: Box<Expr>,
@@ -180,6 +275,13 @@ pub enum ExprKind {
         target: ValueType,
         args: Vec<Expr>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldInitializer {
+    pub name: String,
+    pub value: Expr,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -19,10 +19,13 @@ pub enum TokenKind {
     Update,
     Draw,
     Fn,
+    Struct,
     Return,
     If,
     Else,
     While,
+    For,
+    In,
     True,
     False,
     I32,
@@ -33,6 +36,10 @@ pub enum TokenKind {
     RightParen,
     LeftBrace,
     RightBrace,
+    LeftBracket,
+    RightBracket,
+    Dot,
+    DotDot,
     Colon,
     Comma,
     Semicolon,
@@ -91,6 +98,10 @@ impl<'a> Lexer<'a> {
                 b')' => self.simple(TokenKind::RightParen, start),
                 b'{' => self.simple(TokenKind::LeftBrace, start),
                 b'}' => self.simple(TokenKind::RightBrace, start),
+                b'[' => self.simple(TokenKind::LeftBracket, start),
+                b']' => self.simple(TokenKind::RightBracket, start),
+                b'.' if self.take(b'.') => self.push(TokenKind::DotDot, start),
+                b'.' => self.simple(TokenKind::Dot, start),
                 b':' => self.simple(TokenKind::Colon, start),
                 b',' => self.simple(TokenKind::Comma, start),
                 b';' => self.simple(TokenKind::Semicolon, start),
@@ -248,10 +259,13 @@ impl<'a> Lexer<'a> {
             "update" => TokenKind::Update,
             "draw" => TokenKind::Draw,
             "fn" => TokenKind::Fn,
+            "struct" => TokenKind::Struct,
             "return" => TokenKind::Return,
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "while" => TokenKind::While,
+            "for" => TokenKind::For,
+            "in" => TokenKind::In,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "i32" => TokenKind::I32,
@@ -305,7 +319,8 @@ mod tests {
 
     #[test]
     fn lexes_longest_match_operators() {
-        let tokens = lex("+= -= *= /= <= >= == != && || -> + - * /").expect("operators should lex");
+        let tokens =
+            lex("+= -= *= /= <= >= == != && || -> .. . + - * /").expect("operators should lex");
         let kinds = tokens
             .into_iter()
             .map(|token| token.kind)
@@ -324,6 +339,8 @@ mod tests {
                 TokenKind::AndAnd,
                 TokenKind::OrOr,
                 TokenKind::Arrow,
+                TokenKind::DotDot,
+                TokenKind::Dot,
                 TokenKind::Plus,
                 TokenKind::Minus,
                 TokenKind::Star,
