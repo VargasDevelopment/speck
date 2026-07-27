@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use crate::ast::{
     ArrayLength, AssignOp, BinaryOp, Block, ConstantValue, Expr, ExprKind, Function, FunctionKind,
-    Program, ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
+    Program, ReturnType, Stmt, StmtKind, StructDecl, UnaryOp, ValueType,
 };
 use crate::builtins;
 
@@ -40,6 +40,11 @@ pub fn emit(program: &Program) -> String {
 
 pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String {
     let functions = function_signatures(program);
+    let structs = program
+        .structs
+        .iter()
+        .map(|declaration| (declaration.name.clone(), declaration.clone()))
+        .collect::<HashMap<_, _>>();
     let mut globals: HashMap<_, _> = program
         .globals
         .iter()
@@ -71,7 +76,7 @@ pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String
             .value
             .as_ref()
             .expect("semantic checking evaluates every constant");
-        if matches!(value, ConstantValue::Array { .. }) {
+        if is_aggregate_constant(value) {
             globals.insert(
                 constant.name.clone(),
                 Variable {
@@ -113,12 +118,30 @@ pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String
     output.push_str("declare void @crumb_bounds_fail(i32, i32)\n");
     output.push('\n');
 
+    for declaration in &program.structs {
+        let fields = declaration
+            .fields
+            .iter()
+            .map(|field| llvm_value_type(&field.ty))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            output,
+            "%spk_struct_{} = type {{ {fields} }}",
+            declaration.name
+        )
+        .expect("writing to a string cannot fail");
+    }
+    if !program.structs.is_empty() {
+        output.push('\n');
+    }
+
     for constant in &program.constants {
         let value = constant
             .value
             .as_ref()
             .expect("semantic checking evaluates every constant");
-        if matches!(value, ConstantValue::Array { .. }) {
+        if is_aggregate_constant(value) {
             writeln!(
                 output,
                 "@spk_const_{} = internal constant {} {}",
@@ -147,13 +170,13 @@ pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String
         || program
             .constants
             .iter()
-            .any(|constant| matches!(constant.value, Some(ConstantValue::Array { .. })))
+            .any(|constant| constant.value.as_ref().is_some_and(is_aggregate_constant))
     {
         output.push('\n');
     }
 
     for function in &program.functions {
-        let emitter = FunctionEmitter::new(function, &globals, &constants, &functions);
+        let emitter = FunctionEmitter::new(function, &globals, &constants, &structs, &functions);
         output.push_str(&emitter.emit());
         output.push('\n');
     }
@@ -194,6 +217,7 @@ struct FunctionEmitter<'a> {
     function: &'a Function,
     globals: &'a HashMap<String, Variable>,
     constants: &'a HashMap<String, ConstantValue>,
+    structs: &'a HashMap<String, StructDecl>,
     functions: &'a HashMap<String, Signature>,
     scopes: Vec<HashMap<String, Variable>>,
     lines: Vec<String>,
@@ -208,12 +232,14 @@ impl<'a> FunctionEmitter<'a> {
         function: &'a Function,
         globals: &'a HashMap<String, Variable>,
         constants: &'a HashMap<String, ConstantValue>,
+        structs: &'a HashMap<String, StructDecl>,
         functions: &'a HashMap<String, Signature>,
     ) -> Self {
         Self {
             function,
             globals,
             constants,
+            structs,
             functions,
             scopes: vec![HashMap::new()],
             lines: Vec::new(),
@@ -354,6 +380,13 @@ impl<'a> FunctionEmitter<'a> {
                 else_block,
             } => self.if_statement(condition, then_block, else_block.as_ref()),
             StmtKind::While { condition, body } => self.while_statement(condition, body),
+            StmtKind::For {
+                name,
+                lower,
+                upper,
+                body,
+                ..
+            } => self.for_statement(name, lower, upper, body),
             StmtKind::Return(value) => {
                 if let Some(value) = value {
                     let value = self.expression(value);
@@ -435,6 +468,52 @@ impl<'a> FunctionEmitter<'a> {
         self.place_label(&end_label);
     }
 
+    fn for_statement(&mut self, name: &str, lower: &Expr, upper: &Expr, body: &Block) {
+        let lower = self.expression(lower);
+        let upper = self.expression(upper);
+        let pointer = self.temp();
+        self.instruction(format!("{pointer} = alloca i32"));
+        self.instruction(format!("store i32 {}, ptr {pointer}", lower.repr));
+
+        let condition_label = self.label("for_condition");
+        let body_label = self.label("for_body");
+        let end_label = self.label("for_end");
+        self.terminate(format!("br label %{condition_label}"));
+
+        self.place_label(&condition_label);
+        let current = self.temp();
+        self.instruction(format!("{current} = load i32, ptr {pointer}"));
+        let in_range = self.temp();
+        self.instruction(format!(
+            "{in_range} = icmp slt i32 {current}, {}",
+            upper.repr
+        ));
+        self.terminate(format!(
+            "br i1 {in_range}, label %{body_label}, label %{end_label}"
+        ));
+
+        self.place_label(&body_label);
+        self.scopes.push(HashMap::from([(
+            name.to_owned(),
+            Variable {
+                ty: ValueType::I32,
+                pointer: pointer.clone(),
+            },
+        )]));
+        self.statements(body);
+        self.scopes.pop();
+        if !self.terminated {
+            let current = self.temp();
+            self.instruction(format!("{current} = load i32, ptr {pointer}"));
+            let next = self.temp();
+            self.instruction(format!("{next} = add i32 {current}, 1"));
+            self.instruction(format!("store i32 {next}, ptr {pointer}"));
+            self.terminate(format!("br label %{condition_label}"));
+        }
+
+        self.place_label(&end_label);
+    }
+
     fn expression_as(&mut self, expression: &Expr, expected: &ValueType) -> Value {
         let ExprKind::ArrayLiteral(elements) = &expression.kind else {
             return self.expression(expression);
@@ -460,6 +539,39 @@ impl<'a> FunctionEmitter<'a> {
         }
     }
 
+    fn struct_literal(
+        &mut self,
+        name: &str,
+        initializers: &[crate::ast::FieldInitializer],
+    ) -> Value {
+        let declaration = self
+            .structs
+            .get(name)
+            .expect("semantic checking guarantees struct literal types")
+            .clone();
+        let struct_type = ValueType::Struct(name.to_owned());
+        let aggregate_type = llvm_value_type(&struct_type);
+        let mut aggregate = "undef".to_owned();
+        for (index, field) in declaration.fields.iter().enumerate() {
+            let initializer = initializers
+                .iter()
+                .find(|initializer| initializer.name == field.name)
+                .expect("semantic checking guarantees every field initializer");
+            let value = self.expression_as(&initializer.value, &field.ty);
+            let temp = self.temp();
+            self.instruction(format!(
+                "{temp} = insertvalue {aggregate_type} {aggregate}, {} {}, {index}",
+                llvm_value_type(&field.ty),
+                value.repr
+            ));
+            aggregate = temp;
+        }
+        Value {
+            ty: struct_type.into(),
+            repr: aggregate,
+        }
+    }
+
     fn lvalue(&mut self, expression: &Expr) -> Option<Variable> {
         match &expression.kind {
             ExprKind::Variable(name) => self.variable(name),
@@ -477,6 +589,29 @@ impl<'a> FunctionEmitter<'a> {
                 ));
                 Some(Variable {
                     ty: element_type,
+                    pointer,
+                })
+            }
+            ExprKind::Field { base, name, .. } => {
+                let base = self.lvalue(base)?;
+                let ValueType::Struct(struct_name) = &base.ty else {
+                    return None;
+                };
+                let declaration = self.structs.get(struct_name)?;
+                let (index, field) = declaration
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .find(|(_, field)| field.name == name.as_str())?;
+                let field_type = field.ty.clone();
+                let aggregate_type = llvm_value_type(&base.ty);
+                let pointer = self.temp();
+                self.instruction(format!(
+                    "{pointer} = getelementptr inbounds {aggregate_type}, ptr {}, i32 0, i32 {index}",
+                    base.pointer
+                ));
+                Some(Variable {
+                    ty: field_type,
                     pointer,
                 })
             }
@@ -523,6 +658,7 @@ impl<'a> FunctionEmitter<'a> {
             ExprKind::ArrayLiteral(_) => {
                 unreachable!("array literals are emitted with their declared type")
             }
+            ExprKind::StructLiteral { name, fields } => self.struct_literal(name, fields),
             ExprKind::Variable(name) => {
                 if let Some(variable) = self.variable(name) {
                     let temp = self.temp();
@@ -547,10 +683,31 @@ impl<'a> FunctionEmitter<'a> {
                     }
                 }
             }
-            ExprKind::Index { .. } => {
-                let variable = self
-                    .lvalue(expression)
-                    .expect("semantic checking guarantees indexed lvalues");
+            ExprKind::Index { base, index } => {
+                let variable = if let Some(variable) = self.lvalue(expression) {
+                    variable
+                } else {
+                    let base = self.expression(base);
+                    let base_type = base.value_type();
+                    let (element_type, length) = base_type
+                        .resolved_array()
+                        .expect("semantic checking guarantees array index bases");
+                    let element_type = element_type.clone();
+                    let array_type = llvm_value_type(&base_type);
+                    let storage = self.entry_alloca(&array_type);
+                    self.instruction(format!("store {array_type} {}, ptr {storage}", base.repr));
+                    let index = self.expression(index);
+                    self.bounds_check(&index.repr, length);
+                    let pointer = self.temp();
+                    self.instruction(format!(
+                        "{pointer} = getelementptr inbounds {array_type}, ptr {storage}, i32 0, i32 {}",
+                        index.repr
+                    ));
+                    Variable {
+                        ty: element_type,
+                        pointer,
+                    }
+                };
                 let temp = self.temp();
                 self.instruction(format!(
                     "{temp} = load {}, ptr {}",
@@ -559,6 +716,44 @@ impl<'a> FunctionEmitter<'a> {
                 ));
                 Value {
                     ty: variable.ty.into(),
+                    repr: temp,
+                }
+            }
+            ExprKind::Field { base, name, .. } => {
+                if let Some(variable) = self.lvalue(expression) {
+                    let temp = self.temp();
+                    self.instruction(format!(
+                        "{temp} = load {}, ptr {}",
+                        llvm_value_type(&variable.ty),
+                        variable.pointer
+                    ));
+                    return Value {
+                        ty: variable.ty.into(),
+                        repr: temp,
+                    };
+                }
+                let base = self.expression(base);
+                let ValueType::Struct(struct_name) = base.value_type() else {
+                    unreachable!("semantic checking guarantees struct field bases");
+                };
+                let declaration = self
+                    .structs
+                    .get(&struct_name)
+                    .expect("semantic checking guarantees struct types");
+                let (index, field) = declaration
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .find(|(_, field)| field.name == name.as_str())
+                    .expect("semantic checking guarantees field names");
+                let field_type = field.ty.clone();
+                let temp = self.temp();
+                self.instruction(format!(
+                    "{temp} = extractvalue %spk_struct_{struct_name} {}, {index}",
+                    base.repr
+                ));
+                Value {
+                    ty: field_type.into(),
                     repr: temp,
                 }
             }
@@ -820,6 +1015,13 @@ impl<'a> FunctionEmitter<'a> {
         name
     }
 
+    fn entry_alloca(&mut self, llvm_type: &str) -> String {
+        let pointer = self.temp();
+        self.lines
+            .insert(2, format!("  {pointer} = alloca {llvm_type}"));
+        pointer
+    }
+
     fn label(&mut self, prefix: &str) -> String {
         let name = format!("{prefix}_{}", self.next_label);
         self.next_label += 1;
@@ -847,6 +1049,7 @@ fn llvm_value_type(ty: &ValueType) -> String {
         ValueType::I32 => "i32".into(),
         ValueType::F32 => "float".into(),
         ValueType::Bool => "i1".into(),
+        ValueType::Struct(name) => format!("%spk_struct_{name}"),
         ValueType::Array {
             element,
             length: ArrayLength::Resolved(length),
@@ -869,6 +1072,16 @@ fn llvm_constant(value: &ConstantValue) -> String {
         ConstantValue::I32(value) => value.to_string(),
         ConstantValue::F32(value) => llvm_float(*value),
         ConstantValue::Bool(value) => value.to_string(),
+        ConstantValue::Struct { fields, .. } => {
+            let fields = fields
+                .iter()
+                .map(|(_, value)| {
+                    format!("{} {}", llvm_value_type(&value.ty()), llvm_constant(value))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ {fields} }}")
+        }
         ConstantValue::Array {
             element_type,
             elements,
@@ -882,6 +1095,13 @@ fn llvm_constant(value: &ConstantValue) -> String {
             format!("[{elements}]")
         }
     }
+}
+
+fn is_aggregate_constant(value: &ConstantValue) -> bool {
+    matches!(
+        value,
+        ConstantValue::Array { .. } | ConstantValue::Struct { .. }
+    )
 }
 
 fn llvm_float(value: f32) -> String {

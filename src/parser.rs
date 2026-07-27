@@ -1,8 +1,10 @@
+use std::collections::HashSet;
 use std::mem::discriminant;
 
 use crate::ast::{
-    ArrayLength, AssignOp, BinaryOp, Block, Constant, Expr, ExprKind, Function, FunctionKind,
-    Global, Param, Program, ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
+    ArrayLength, AssignOp, BinaryOp, Block, Constant, Expr, ExprKind, FieldInitializer, Function,
+    FunctionKind, Global, Param, Program, ReturnType, Stmt, StmtKind, StructDecl, StructField,
+    UnaryOp, ValueType,
 };
 use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::{Token, TokenKind};
@@ -14,11 +16,30 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, Vec<Diagnostic>> {
 struct Parser {
     tokens: Vec<Token>,
     cursor: usize,
+    struct_names: HashSet<String>,
+    value_scopes: Vec<HashSet<String>>,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, cursor: 0 }
+        let struct_names = tokens
+            .windows(2)
+            .filter_map(|window| {
+                if matches!(window[0].kind, TokenKind::Struct)
+                    && let TokenKind::Identifier(name) = &window[1].kind
+                {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        Self {
+            tokens,
+            cursor: 0,
+            struct_names,
+            value_scopes: Vec::new(),
+        }
     }
 
     fn run(mut self) -> Result<Program, Diagnostic> {
@@ -32,11 +53,14 @@ impl Parser {
         };
         self.take(&TokenKind::Semicolon);
 
+        let mut structs = Vec::new();
         let mut constants = Vec::new();
         let mut globals = Vec::new();
         let mut functions = Vec::new();
         while !self.at(&TokenKind::Eof) {
-            if self.at(&TokenKind::Const) {
+            if self.at(&TokenKind::Struct) {
+                structs.push(self.parse_struct()?);
+            } else if self.at(&TokenKind::Const) {
                 constants.push(self.parse_constant()?);
             } else if self.at(&TokenKind::Let) {
                 globals.push(self.parse_global()?);
@@ -50,7 +74,7 @@ impl Parser {
                 functions.push(self.parse_named_function()?);
             } else {
                 return Err(self.error_here(
-                    "expected a top-level `const`, `let`, `fn`, `start`, `update`, or `draw` declaration",
+                    "expected a top-level `struct`, `const`, `let`, `fn`, `start`, `update`, or `draw` declaration",
                 ));
             }
         }
@@ -58,9 +82,36 @@ impl Parser {
         Ok(Program {
             title,
             title_span: title_token.span,
+            structs,
             constants,
             globals,
             functions,
+        })
+    }
+
+    fn parse_struct(&mut self) -> Result<StructDecl, Diagnostic> {
+        let start = self.expect(&TokenKind::Struct, "expected `struct`")?.span;
+        let (name, _) = self.identifier("expected a struct name")?;
+        self.expect(&TokenKind::LeftBrace, "expected `{` after the struct name")?;
+        let mut fields = Vec::new();
+        while !self.at(&TokenKind::RightBrace) && !self.at(&TokenKind::Eof) {
+            let (field_name, field_span) = self.identifier("expected a field name")?;
+            self.expect(&TokenKind::Colon, "expected `:` after field name")?;
+            let ty = self.parse_value_type()?;
+            fields.push(StructField {
+                name: field_name,
+                ty,
+                span: field_span,
+            });
+            self.take(&TokenKind::Comma);
+        }
+        let end = self
+            .expect(&TokenKind::RightBrace, "expected `}` after struct fields")?
+            .span;
+        Ok(StructDecl {
+            name,
+            fields,
+            span: start.merge(end),
         })
     }
 
@@ -103,7 +154,7 @@ impl Parser {
 
     fn parse_start(&mut self) -> Result<Function, Diagnostic> {
         let start = self.expect(&TokenKind::Start, "expected `start`")?.span;
-        let (body, end) = self.block()?;
+        let (body, end) = self.block_with_bindings(Vec::new())?;
         Ok(Function {
             name: "start".into(),
             kind: FunctionKind::Start,
@@ -127,7 +178,7 @@ impl Parser {
             &TokenKind::RightParen,
             "expected `)` after the frame-delta parameter",
         )?;
-        let (body, end) = self.block()?;
+        let (body, end) = self.block_with_bindings(vec![name.clone()])?;
         Ok(Function {
             name: "update".into(),
             kind: FunctionKind::Update,
@@ -144,7 +195,7 @@ impl Parser {
 
     fn parse_draw(&mut self) -> Result<Function, Diagnostic> {
         let start = self.expect(&TokenKind::Draw, "expected `draw`")?.span;
-        let (body, end) = self.block()?;
+        let (body, end) = self.block_with_bindings(Vec::new())?;
         Ok(Function {
             name: "draw".into(),
             kind: FunctionKind::Draw,
@@ -181,7 +232,8 @@ impl Parser {
             "expected `->` and a return type after parameters",
         )?;
         let return_type = self.parse_return_type()?;
-        let (body, end) = self.block()?;
+        let parameter_names = params.iter().map(|param| param.name.clone()).collect();
+        let (body, end) = self.block_with_bindings(parameter_names)?;
         Ok(Function {
             name,
             kind: FunctionKind::Named,
@@ -198,6 +250,7 @@ impl Parser {
             TokenKind::I32 => Ok(ValueType::I32),
             TokenKind::F32 => Ok(ValueType::F32),
             TokenKind::Bool => Ok(ValueType::Bool),
+            TokenKind::Identifier(name) => Ok(ValueType::Struct(name)),
             TokenKind::LeftBracket => {
                 let element = self.parse_value_type()?;
                 self.expect(
@@ -246,7 +299,7 @@ impl Parser {
                 token.span,
             )),
             _ => Err(Diagnostic::new(
-                "expected type `i32`, `f32`, `bool`, or a fixed array type",
+                "expected a scalar, struct, or fixed array type",
                 token.span,
             )),
         }
@@ -260,8 +313,16 @@ impl Parser {
         }
     }
 
+    fn block_with_bindings(&mut self, bindings: Vec<String>) -> Result<(Block, Span), Diagnostic> {
+        self.value_scopes.push(bindings.into_iter().collect());
+        let result = self.block();
+        self.value_scopes.pop();
+        result
+    }
+
     fn block(&mut self) -> Result<(Block, Span), Diagnostic> {
         self.expect(&TokenKind::LeftBrace, "expected `{` to begin block")?;
+        self.value_scopes.push(HashSet::new());
         let mut statements = Vec::new();
         while !self.at(&TokenKind::RightBrace) && !self.at(&TokenKind::Eof) {
             statements.push(self.statement()?);
@@ -269,6 +330,7 @@ impl Parser {
         let end = self
             .expect(&TokenKind::RightBrace, "expected `}` to close block")?
             .span;
+        self.value_scopes.pop();
         Ok((statements, end))
     }
 
@@ -281,6 +343,9 @@ impl Parser {
         }
         if self.at(&TokenKind::While) {
             return self.while_statement();
+        }
+        if self.at(&TokenKind::For) {
+            return self.for_statement();
         }
         if self.at(&TokenKind::Return) {
             return self.return_statement();
@@ -305,6 +370,10 @@ impl Parser {
         self.expect(&TokenKind::Equal, "expected `=` before initializer")?;
         let init = self.expression()?;
         let end = self.optional_semicolon().unwrap_or(init.span);
+        self.value_scopes
+            .last_mut()
+            .expect("local declarations are parsed inside a block")
+            .insert(name.clone());
         Ok(Stmt {
             kind: StmtKind::Let { name, ty, init },
             span: start.merge(end),
@@ -361,6 +430,26 @@ impl Parser {
         let (body, end) = self.block()?;
         Ok(Stmt {
             kind: StmtKind::While { condition, body },
+            span: start.merge(end),
+        })
+    }
+
+    fn for_statement(&mut self) -> Result<Stmt, Diagnostic> {
+        let start = self.expect(&TokenKind::For, "expected `for`")?.span;
+        let (name, name_span) = self.identifier("expected a loop variable after `for`")?;
+        self.expect(&TokenKind::In, "expected `in` after loop variable")?;
+        let lower = self.expression()?;
+        self.expect(&TokenKind::DotDot, "expected `..` between range bounds")?;
+        let upper = self.expression()?;
+        let (body, end) = self.block_with_bindings(vec![name.clone()])?;
+        Ok(Stmt {
+            kind: StmtKind::For {
+                name,
+                name_span,
+                lower,
+                upper,
+                body,
+            },
             span: start.merge(end),
         })
     }
@@ -500,19 +589,34 @@ impl Parser {
 
     fn postfix(&mut self) -> Result<Expr, Diagnostic> {
         let mut expression = self.primary()?;
-        while self.take(&TokenKind::LeftBracket) {
-            let index = self.expression()?;
-            let end = self
-                .expect(&TokenKind::RightBracket, "expected `]` after array index")?
-                .span;
-            let span = expression.span.merge(end);
-            expression = Expr {
-                kind: ExprKind::Index {
-                    base: Box::new(expression),
-                    index: Box::new(index),
-                },
-                span,
-            };
+        loop {
+            if self.take(&TokenKind::LeftBracket) {
+                let index = self.expression()?;
+                let end = self
+                    .expect(&TokenKind::RightBracket, "expected `]` after array index")?
+                    .span;
+                let span = expression.span.merge(end);
+                expression = Expr {
+                    kind: ExprKind::Index {
+                        base: Box::new(expression),
+                        index: Box::new(index),
+                    },
+                    span,
+                };
+            } else if self.take(&TokenKind::Dot) {
+                let (name, name_span) = self.identifier("expected a field name after `.`")?;
+                let span = expression.span.merge(name_span);
+                expression = Expr {
+                    kind: ExprKind::Field {
+                        base: Box::new(expression),
+                        name,
+                        name_span,
+                    },
+                    span,
+                };
+            } else {
+                break;
+            }
         }
         Ok(expression)
     }
@@ -554,6 +658,9 @@ impl Parser {
                 })
             }
             TokenKind::Identifier(name) => {
+                if self.looks_like_struct_literal(&name) {
+                    return self.struct_literal(name, token.span);
+                }
                 if !self.take(&TokenKind::LeftParen) {
                     return Ok(Expr {
                         kind: ExprKind::Variable(name),
@@ -592,6 +699,54 @@ impl Parser {
             }
             _ => Err(Diagnostic::new("expected an expression", token.span)),
         }
+    }
+
+    fn struct_literal(&mut self, name: String, start: Span) -> Result<Expr, Diagnostic> {
+        self.expect(&TokenKind::LeftBrace, "expected `{` after struct type name")?;
+        let mut fields = Vec::new();
+        while !self.at(&TokenKind::RightBrace) && !self.at(&TokenKind::Eof) {
+            let (field_name, field_start) = self.identifier("expected a field initializer name")?;
+            self.expect(
+                &TokenKind::Colon,
+                "expected `:` after field initializer name",
+            )?;
+            let value = self.expression()?;
+            let span = field_start.merge(value.span);
+            fields.push(FieldInitializer {
+                name: field_name,
+                value,
+                span,
+            });
+            self.take(&TokenKind::Comma);
+        }
+        let end = self
+            .expect(&TokenKind::RightBrace, "expected `}` after struct literal")?
+            .span;
+        Ok(Expr {
+            kind: ExprKind::StructLiteral { name, fields },
+            span: start.merge(end),
+        })
+    }
+
+    fn looks_like_struct_literal(&self, name: &str) -> bool {
+        if !self.at(&TokenKind::LeftBrace) || self.is_value_binding(name) {
+            return false;
+        }
+        self.struct_names.contains(name)
+            || matches!(
+                (
+                    self.tokens.get(self.cursor + 1).map(|token| &token.kind),
+                    self.tokens.get(self.cursor + 2).map(|token| &token.kind)
+                ),
+                (Some(TokenKind::Identifier(_)), Some(TokenKind::Colon))
+            )
+    }
+
+    fn is_value_binding(&self, name: &str) -> bool {
+        self.value_scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.contains(name))
     }
 
     fn arguments(&mut self) -> Result<(Vec<Expr>, Span), Diagnostic> {
@@ -768,6 +923,60 @@ draw {}
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn parses_struct_declarations_literals_fields_and_field_assignment() {
+        let program = parse_source(
+            r#"game "Structs"
+struct Point { x: i32, y: i32 }
+let point: Point = Point { y: 2, x: 1 }
+start { let x: i32 = point.x point.y += x }
+update(dt: f32) {}
+draw {}
+"#,
+        );
+        assert_eq!(program.structs[0].name, "Point");
+        assert_eq!(program.structs[0].fields.len(), 2);
+        assert!(matches!(
+            program.globals[0].init.kind,
+            ExprKind::StructLiteral { .. }
+        ));
+        assert!(matches!(
+            program.functions[0].body[1].kind,
+            StmtKind::Assign {
+                target: Expr {
+                    kind: ExprKind::Field { .. },
+                    ..
+                },
+                op: AssignOp::Add,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parses_range_for_as_a_statement() {
+        let program = parse_source(
+            r#"game "Range"
+start {
+    for i in 1..4 {
+        print_i32(i)
+    }
+}
+update(dt: f32) {}
+draw {}
+"#,
+        );
+        let StmtKind::For {
+            name, lower, upper, ..
+        } = &program.functions[0].body[0].kind
+        else {
+            panic!("expected a range-based for statement");
+        };
+        assert_eq!(name, "i");
+        assert!(matches!(lower.kind, ExprKind::I32(1)));
+        assert!(matches!(upper.kind, ExprKind::I32(4)));
     }
 
     #[test]

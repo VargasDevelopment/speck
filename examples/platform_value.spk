@@ -1,0 +1,40 @@
+game "Platform Value"
+
+struct Platform {
+    x: i32
+    y: i32
+    width: i32
+    height: i32
+}
+
+const BASE_PLATFORM: Platform = Platform {
+    height: 5,
+    width: 60,
+    y: 140,
+    x: 40
+}
+
+let platform: Platform = BASE_PLATFORM
+
+fn shifted(value: Platform) -> Platform {
+    value.x += 5
+    return value
+}
+
+fn draw_platform(value: Platform) -> void {
+    fill_rect(value.x, value.y, value.width, value.height, 255, 255, 255)
+}
+
+start {
+    let original: Platform = platform
+    platform = shifted(platform)
+    print_i32(original.x)
+    print_i32(platform.x)
+}
+
+update(dt: f32) {}
+
+draw {
+    clear_rgb(32, 18, 32)
+    draw_platform(platform)
+}

@@ -27,15 +27,23 @@ linking live in `toolchain.rs`, keeping the emitter independent of LLVM's API.
 A future library-based backend can therefore replace the emitter without
 changing parsing or semantics.
 
-The validated AST distinguishes `ValueType` (scalars and fixed arrays) from
-`ReturnType` (a value type or `void`). Array lengths retain their source form
-until semantic analysis resolves positive literals and `i32` constants.
+The validated AST distinguishes `ValueType` (scalars, named structs, and fixed
+arrays) from `ReturnType` (a value type or `void`). Array lengths retain their
+source form until semantic analysis resolves positive literals and `i32`
+constants.
 Semantic analysis collects constant, global, and function names before checking
 bodies. A small dependency-walking constant evaluator annotates top-level
 constants and mutable-global initializers with scalar or aggregate values,
 detects cycles and checked-expression errors, and lets LLVM emit native
 initializers. This remains small enough that a separate HIR would duplicate
 rather than simplify the pipeline.
+
+Struct declarations are collected before value and function checking, so type
+use and literals can refer forward within the module. Compiler-only metadata
+keeps each field's source name, type, and declaration index. A graph walk
+rejects recursive value layout. Literal checking builds a name-to-initializer
+view for duplicate, missing, and unknown diagnostics while LLVM emission always
+uses declaration order.
 
 Boolean `&&` and `||` lower directly to branches and merge phi nodes. Numeric
 compound assignment lowers to one target load, one right-expression evaluation,
@@ -45,13 +53,39 @@ paths produce zero or a clamp value, and only a proven in-range path executes
 the conversion. User functions and all effect-only CRuMB declarations emit
 actual LLVM `void`, `call void`, and `ret void` forms.
 
+The range `for` statement has its own small AST node rather than introducing a
+range expression or runtime type. Semantic analysis checks both bounds before
+opening a child scope containing one read-only `i32` loop binding. LLVM
+evaluates lower then upper once in the preheader, stores the current index in
+an `i32` stack slot, branches on signed `icmp slt`, emits the existing block
+lowering, and adds one on the back edge. No CRuMB call or iterator ABI is
+involved.
+
 Assignment targets now retain expression structure. Semantic lvalue validation
-walks from an indexed element back to its root binding, carries the element type
-and root mutability forward, and rejects non-addressable expressions or any
-write rooted in `const`. LLVM lowering performs the same validated path walk to
-produce a pointer. Fixed arrays lower to ordinary `[N x T]` LLVM values and
-storage; local literals use `insertvalue`, globals use native aggregate
-initializers, and element addresses use `getelementptr`.
+recursively walks any alternating sequence of indexed elements and struct
+fields back to its root binding, carries the selected type and root mutability
+forward, and rejects non-addressable expressions or any write rooted in
+`const`. LLVM lowering performs the same validated path walk to produce one
+pointer into nested storage. Fixed arrays lower to ordinary `[N x T]` LLVM
+values and storage; local literals use `insertvalue`, globals use native
+aggregate initializers, and element addresses use `getelementptr`.
+
+Named records lower to LLVM named aggregate types such as
+`%spk_struct_Platform = type { i32, i32, i32, i32 }`. Locals and globals use
+that value type directly. Field lvalues use their declaration index in
+`getelementptr`, and field reads from returned rvalues use `extractvalue`.
+Function parameters and returns carry the aggregate by value in the generated
+LLVM signature. No target size, alignment, or data layout is hard-coded; the
+host-selected Clang remains authoritative.
+
+Array and struct lowering is recursive rather than special-cased by aggregate
+shape. An array of structs is `[N x %spk_struct_Name]`; a fixed-array field is
+the same `[N x T]` value nested in the named record. Constant evaluation and
+LLVM constant emission recurse through the declared element and field types,
+so immutable nested level data becomes a native constant initializer. Loading
+an indexed struct produces a value copy, while an assignment path retains the
+address of the root storage and descends with checked array GEPs and fixed field
+GEPs. No compiler or runtime reference value is introduced.
 
 Each dynamic array access emits signed nonnegative and upper-bound comparisons.
 The valid branch alone executes an `inbounds getelementptr`; the failure branch
@@ -227,6 +261,8 @@ tool. They do not appear in a generated normal game executable.
 - Software drawing is limited to clear and filled rectangles in RGB888 format.
 - Global initialization is deliberately compile-time-only; local constants and
   general compile-time execution do not exist.
+- Range loops support only an exclusive `i32` upper bound and unit positive
+  stepping. There are no range values, array iterators, `break`, or `continue`.
 - Constant evaluation diagnoses integer overflow and division by zero. Runtime
   integer overflow and division-by-zero behavior remain provisional.
 - The backend emits straightforward stack-based IR and relies on Clang's LLVM

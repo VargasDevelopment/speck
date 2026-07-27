@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
     ArrayLength, AssignOp, BinaryOp, Block, ConstantValue, Expr, ExprKind, Function, FunctionKind,
-    Program, ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
+    Program, ReturnType, Stmt, StmtKind, StructDecl, UnaryOp, ValueType,
 };
 use crate::builtins;
 use crate::diagnostic::{Diagnostic, Span};
@@ -16,7 +16,14 @@ struct Signature {
 #[derive(Clone)]
 struct Binding {
     ty: ValueType,
-    mutable: bool,
+    mutability: Mutability,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mutability {
+    Mutable,
+    Constant,
+    LoopVariable,
 }
 
 pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
@@ -36,6 +43,40 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
             .iter()
             .map(|constant| (constant.name.to_owned(), "predefined constant")),
     );
+    let mut structs = HashMap::new();
+    for declaration in &program.structs {
+        let duplicate = structs
+            .insert(declaration.name.clone(), declaration.clone())
+            .is_some();
+        if duplicate {
+            diagnostics.push(Diagnostic::new(
+                format!("struct `{}` is declared more than once", declaration.name),
+                declaration.span,
+            ));
+        } else if let Some(existing) = top_level_names.insert(declaration.name.clone(), "struct") {
+            diagnostics.push(Diagnostic::new(
+                format!(
+                    "struct `{}` conflicts with an existing {existing}",
+                    declaration.name
+                ),
+                declaration.span,
+            ));
+        }
+        let mut fields = HashSet::new();
+        for field in &declaration.fields {
+            if !fields.insert(&field.name) {
+                diagnostics.push(Diagnostic::new(
+                    format!(
+                        "field `{}` is declared more than once in struct `{}`",
+                        field.name, declaration.name
+                    ),
+                    field.span,
+                ));
+            }
+        }
+    }
+    validate_declared_types(program, &structs, &mut diagnostics);
+    reject_recursive_structs(&structs, &mut diagnostics);
 
     for constant in &program.constants {
         if builtins::predefined_constant(&constant.name).is_some() {
@@ -184,6 +225,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
             &globals,
             &constants,
             &predefined_values,
+            &structs,
             &functions,
             ReturnType::Void,
             &mut diagnostics,
@@ -209,6 +251,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
             &globals,
             &constants,
             &predefined_values,
+            &structs,
             &functions,
             ReturnType::Void,
             &mut diagnostics,
@@ -243,7 +286,8 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
             )
         })
         .collect();
-    let mut evaluator = ConstantEvaluator::new(constant_defs, &globals, &invalid_constants);
+    let mut evaluator =
+        ConstantEvaluator::new(constant_defs, &globals, &structs, &invalid_constants);
     let constant_names = program
         .constants
         .iter()
@@ -266,7 +310,13 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         if invalid_globals.contains(&index) {
             continue;
         }
-        match evaluate_initializer(&global.init, &global.ty, &evaluated_constants, &globals) {
+        match evaluate_initializer(
+            &global.init,
+            &global.ty,
+            &evaluated_constants,
+            &globals,
+            &structs,
+        ) {
             Ok(value) if value.ty() == global.ty => global.value = Some(value),
             Ok(_) => {}
             Err(message) => diagnostics.push(Diagnostic::new(message, global.init.span)),
@@ -287,6 +337,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
             &globals,
             &constants,
             &evaluated_constants,
+            &structs,
             &functions,
             &mut diagnostics,
         );
@@ -308,6 +359,7 @@ struct LengthConstantDefinition {
 
 struct LengthConstantEvaluator {
     definitions: HashMap<String, LengthConstantDefinition>,
+    structs: HashMap<String, StructDecl>,
     values: HashMap<String, ConstantValue>,
     visiting: Vec<String>,
 }
@@ -328,6 +380,11 @@ impl LengthConstantEvaluator {
                         },
                     )
                 })
+                .collect(),
+            structs: program
+                .structs
+                .iter()
+                .map(|declaration| (declaration.name.clone(), declaration.clone()))
                 .collect(),
             values: builtins::CONSTANTS
                 .iter()
@@ -384,10 +441,16 @@ impl LengthConstantEvaluator {
         let mut ty = definition.ty.clone();
         let mut diagnostics = Vec::new();
         resolve_value_type(&mut ty, self, &mut diagnostics);
+        let mut structs = self.structs.clone();
+        for declaration in structs.values_mut() {
+            for field in &mut declaration.fields {
+                resolve_value_type(&mut field.ty, self, &mut diagnostics);
+            }
+        }
         let result = if let Some(diagnostic) = diagnostics.into_iter().next() {
             Err(diagnostic)
         } else {
-            evaluate_typed_expression(&definition.init, &ty, |dependency| {
+            evaluate_typed_expression(&definition.init, &ty, &structs, |dependency| {
                 self.evaluate_value(dependency, definition.init.span)
             })
         };
@@ -412,6 +475,11 @@ fn resolve_program_types(program: &mut Program, diagnostics: &mut Vec<Diagnostic
     let snapshot = program.clone();
     let mut evaluator = LengthConstantEvaluator::new(&snapshot);
 
+    for declaration in &mut program.structs {
+        for field in &mut declaration.fields {
+            resolve_value_type(&mut field.ty, &mut evaluator, diagnostics);
+        }
+    }
     for constant in &mut program.constants {
         resolve_value_type(&mut constant.ty, &mut evaluator, diagnostics);
     }
@@ -448,6 +516,9 @@ fn resolve_block_types(
                 }
             }
             StmtKind::While { body, .. } => {
+                resolve_block_types(body, evaluator, diagnostics);
+            }
+            StmtKind::For { body, .. } => {
                 resolve_block_types(body, evaluator, diagnostics);
             }
             StmtKind::Assign { .. } | StmtKind::Expr(_) | StmtKind::Return(_) => {}
@@ -499,6 +570,126 @@ fn positive_array_length(value: i64, span: Span) -> Result<usize, Diagnostic> {
     usize::try_from(value).map_err(|_| Diagnostic::new("array length is too large", span))
 }
 
+fn validate_declared_types(
+    program: &Program,
+    structs: &HashMap<String, StructDecl>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for declaration in &program.structs {
+        for field in &declaration.fields {
+            validate_known_type(&field.ty, field.span, structs, diagnostics);
+        }
+    }
+    for constant in &program.constants {
+        validate_known_type(&constant.ty, constant.span, structs, diagnostics);
+    }
+    for global in &program.globals {
+        validate_known_type(&global.ty, global.span, structs, diagnostics);
+    }
+    for function in &program.functions {
+        for param in &function.params {
+            validate_known_type(&param.ty, param.span, structs, diagnostics);
+        }
+        if let ReturnType::Value(ty) = &function.return_type {
+            validate_known_type(ty, function.span, structs, diagnostics);
+        }
+        validate_block_types(&function.body, structs, diagnostics);
+    }
+}
+
+fn validate_block_types(
+    block: &Block,
+    structs: &HashMap<String, StructDecl>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for statement in block {
+        match &statement.kind {
+            StmtKind::Let { ty, .. } => {
+                validate_known_type(ty, statement.span, structs, diagnostics);
+            }
+            StmtKind::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                validate_block_types(then_block, structs, diagnostics);
+                if let Some(else_block) = else_block {
+                    validate_block_types(else_block, structs, diagnostics);
+                }
+            }
+            StmtKind::While { body, .. } => {
+                validate_block_types(body, structs, diagnostics);
+            }
+            StmtKind::For { body, .. } => {
+                validate_block_types(body, structs, diagnostics);
+            }
+            StmtKind::Assign { .. } | StmtKind::Expr(_) | StmtKind::Return(_) => {}
+        }
+    }
+}
+
+fn validate_known_type(
+    ty: &ValueType,
+    span: Span,
+    structs: &HashMap<String, StructDecl>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match ty {
+        ValueType::Struct(name) if !structs.contains_key(name) => diagnostics.push(
+            Diagnostic::new(format!("unknown struct type `{name}`"), span),
+        ),
+        ValueType::Array { element, .. } => {
+            validate_known_type(element, span, structs, diagnostics);
+        }
+        ValueType::I32 | ValueType::F32 | ValueType::Bool | ValueType::Struct(_) => {}
+    }
+}
+
+fn reject_recursive_structs(
+    structs: &HashMap<String, StructDecl>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for declaration in structs.values() {
+        let mut visited = HashSet::new();
+        if struct_reaches(&declaration.name, &declaration.name, structs, &mut visited) {
+            diagnostics.push(Diagnostic::new(
+                format!(
+                    "recursive value type is not supported: struct `{}` contains itself",
+                    declaration.name
+                ),
+                declaration.span,
+            ));
+        }
+    }
+}
+
+fn struct_reaches(
+    target: &str,
+    current: &str,
+    structs: &HashMap<String, StructDecl>,
+    visited: &mut HashSet<String>,
+) -> bool {
+    if !visited.insert(current.to_owned()) {
+        return false;
+    }
+    let Some(declaration) = structs.get(current) else {
+        return false;
+    };
+    declaration.fields.iter().any(|field| {
+        named_types(&field.ty).into_iter().any(|name| {
+            name == target || struct_reaches(target, name, structs, &mut visited.clone())
+        })
+    })
+}
+
+fn named_types(ty: &ValueType) -> Vec<&str> {
+    match ty {
+        ValueType::Struct(name) => vec![name],
+        ValueType::Array { element, .. } => named_types(element),
+        ValueType::I32 | ValueType::F32 | ValueType::Bool => Vec::new(),
+    }
+}
+
 fn validate_compile_time_structure(
     expression: &Expr,
     globals: &HashMap<String, ValueType>,
@@ -548,6 +739,19 @@ fn validate_compile_time_structure(
             valid &= validate_compile_time_structure(base, globals, description, diagnostics);
             valid &= validate_compile_time_structure(index, globals, description, diagnostics);
         }
+        ExprKind::StructLiteral { fields, .. } => {
+            for field in fields {
+                valid &= validate_compile_time_structure(
+                    &field.value,
+                    globals,
+                    description,
+                    diagnostics,
+                );
+            }
+        }
+        ExprKind::Field { base, .. } => {
+            valid &= validate_compile_time_structure(base, globals, description, diagnostics);
+        }
         ExprKind::I32(_) | ExprKind::F32(_) | ExprKind::Bool(_) | ExprKind::Variable(_) => {}
     }
     valid
@@ -573,6 +777,7 @@ fn check_function(
     globals: &HashMap<String, ValueType>,
     constants: &HashMap<String, ValueType>,
     constant_values: &HashMap<String, ConstantValue>,
+    structs: &HashMap<String, StructDecl>,
     functions: &HashMap<String, Signature>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -597,6 +802,7 @@ fn check_function(
         globals,
         constants,
         constant_values,
+        structs,
         functions,
         function.return_type.clone(),
         diagnostics,
@@ -616,7 +822,7 @@ fn check_function(
                 param.name.clone(),
                 Binding {
                     ty: param.ty.clone(),
-                    mutable: true,
+                    mutability: Mutability::Mutable,
                 },
             )
             .is_some()
@@ -644,6 +850,7 @@ struct FunctionChecker<'a> {
     globals: &'a HashMap<String, ValueType>,
     constants: &'a HashMap<String, ValueType>,
     constant_values: &'a HashMap<String, ConstantValue>,
+    structs: &'a HashMap<String, StructDecl>,
     functions: &'a HashMap<String, Signature>,
     return_type: ReturnType,
     scopes: Vec<HashMap<String, Binding>>,
@@ -653,7 +860,7 @@ struct FunctionChecker<'a> {
 #[derive(Clone)]
 struct Lvalue {
     ty: ValueType,
-    mutable: bool,
+    mutability: Mutability,
     root_name: String,
 }
 
@@ -662,6 +869,7 @@ impl<'a> FunctionChecker<'a> {
         globals: &'a HashMap<String, ValueType>,
         constants: &'a HashMap<String, ValueType>,
         constant_values: &'a HashMap<String, ConstantValue>,
+        structs: &'a HashMap<String, StructDecl>,
         functions: &'a HashMap<String, Signature>,
         return_type: ReturnType,
         diagnostics: &'a mut Vec<Diagnostic>,
@@ -670,6 +878,7 @@ impl<'a> FunctionChecker<'a> {
             globals,
             constants,
             constant_values,
+            structs,
             functions,
             return_type,
             scopes: vec![HashMap::new()],
@@ -719,7 +928,7 @@ impl<'a> FunctionChecker<'a> {
                         name.clone(),
                         Binding {
                             ty: ty.clone(),
-                            mutable: true,
+                            mutability: Mutability::Mutable,
                         },
                     )
                     .is_some()
@@ -739,7 +948,14 @@ impl<'a> FunctionChecker<'a> {
                 } else {
                     self.require_value(value, "compound assignment")
                 };
-                if !lvalue.mutable {
+                if lvalue.mutability == Mutability::LoopVariable {
+                    self.error(
+                        format!("loop variable `{}` is read-only", lvalue.root_name),
+                        statement.span,
+                    );
+                    return;
+                }
+                if lvalue.mutability == Mutability::Constant {
                     let direct_variable = matches!(target.kind, ExprKind::Variable(_));
                     let message = if *op == AssignOp::Set && direct_variable {
                         format!("cannot assign to constant `{}`", lvalue.root_name)
@@ -820,6 +1036,41 @@ impl<'a> FunctionChecker<'a> {
                 self.require_bool(condition, "`while` condition");
                 self.check_nested_block(body);
             }
+            StmtKind::For {
+                name,
+                name_span,
+                lower,
+                upper,
+                body,
+            } => {
+                for (bound, description) in
+                    [(lower, "range lower bound"), (upper, "range upper bound")]
+                {
+                    if let Some(actual) = self.require_value(bound, description)
+                        && actual != ValueType::I32
+                    {
+                        self.error(
+                            format!("{description} must be `i32`, found `{}`", actual.name()),
+                            bound.span,
+                        );
+                    }
+                }
+                if builtins::predefined_constant(name).is_some() {
+                    self.error(
+                        format!("loop variable `{name}` conflicts with a predefined key constant"),
+                        *name_span,
+                    );
+                }
+                self.scopes.push(HashMap::from([(
+                    name.clone(),
+                    Binding {
+                        ty: ValueType::I32,
+                        mutability: Mutability::LoopVariable,
+                    },
+                )]));
+                self.check_statements(body);
+                self.scopes.pop();
+            }
             StmtKind::Return(value) => match (self.return_type.clone(), value) {
                 (ReturnType::Void, None) => {}
                 (ReturnType::Void, Some(value)) => {
@@ -878,6 +1129,9 @@ impl<'a> FunctionChecker<'a> {
                 );
                 None
             }
+            ExprKind::StructLiteral { name, fields } => self
+                .infer_struct_literal(name, fields, expression.span)
+                .map(ReturnType::Value),
             ExprKind::Variable(name) => match self.binding(name) {
                 Some(binding) => Some(binding.ty.into()),
                 None => {
@@ -887,6 +1141,13 @@ impl<'a> FunctionChecker<'a> {
             },
             ExprKind::Index { base, index } => self
                 .infer_index(base, index, expression.span)
+                .map(ReturnType::Value),
+            ExprKind::Field {
+                base,
+                name,
+                name_span,
+            } => self
+                .infer_field(base, name, *name_span)
                 .map(ReturnType::Value),
             ExprKind::Unary { op, operand } => {
                 if *op == UnaryOp::Negate
@@ -1043,6 +1304,13 @@ impl<'a> FunctionChecker<'a> {
                         self.error("cannot convert an array to a numeric type", args[0].span);
                         None
                     }
+                    Some(ReturnType::Value(ValueType::Struct(name))) => {
+                        self.error(
+                            format!("cannot convert struct `{name}` to a numeric type"),
+                            args[0].span,
+                        );
+                        None
+                    }
                     Some(ReturnType::Void) => {
                         self.error("cannot convert `void` to a numeric type", args[0].span);
                         None
@@ -1120,12 +1388,99 @@ impl<'a> FunctionChecker<'a> {
         Some(element.clone())
     }
 
+    fn infer_struct_literal(
+        &mut self,
+        name: &str,
+        fields: &[crate::ast::FieldInitializer],
+        span: Span,
+    ) -> Option<ValueType> {
+        let Some(declaration) = self.structs.get(name).cloned() else {
+            self.error(format!("unknown struct type `{name}`"), span);
+            for field in fields {
+                self.infer_expr(&field.value);
+            }
+            return None;
+        };
+        let mut seen = HashSet::new();
+        for initializer in fields {
+            if !seen.insert(initializer.name.clone()) {
+                self.error(
+                    format!(
+                        "field `{}` is initialized more than once in `{name}`",
+                        initializer.name
+                    ),
+                    initializer.span,
+                );
+                self.infer_expr(&initializer.value);
+                continue;
+            }
+            let Some(field) = declaration
+                .fields
+                .iter()
+                .find(|field| field.name == initializer.name)
+            else {
+                self.error(
+                    format!("type `{name}` has no field named `{}`", initializer.name),
+                    initializer.span,
+                );
+                self.infer_expr(&initializer.value);
+                continue;
+            };
+            if let Some(actual) =
+                self.require_value_as(&initializer.value, &field.ty, "field initializer")
+                && actual != field.ty
+            {
+                self.error(
+                    format!(
+                        "field `{}` of `{name}` expects `{}`, but found `{}`",
+                        field.name,
+                        field.ty.name(),
+                        actual.name()
+                    ),
+                    initializer.value.span,
+                );
+            }
+        }
+        for field in &declaration.fields {
+            if !seen.contains(&field.name) {
+                self.error(
+                    format!("missing initializer for field `{}` of `{name}`", field.name),
+                    span,
+                );
+            }
+        }
+        Some(ValueType::Struct(name.to_owned()))
+    }
+
+    fn infer_field(&mut self, base: &Expr, name: &str, name_span: Span) -> Option<ValueType> {
+        let base_type = self.require_value(base, "field access")?;
+        let ValueType::Struct(struct_name) = base_type else {
+            self.error(
+                format!("type `{}` has no fields", base_type.name()),
+                name_span,
+            );
+            return None;
+        };
+        let Some(declaration) = self.structs.get(&struct_name) else {
+            self.error(format!("unknown struct type `{struct_name}`"), base.span);
+            return None;
+        };
+        let Some(field) = declaration.fields.iter().find(|field| field.name == name) else {
+            self.error(
+                format!("type `{struct_name}` has no field named `{name}`"),
+                name_span,
+            );
+            return None;
+        };
+        Some(field.ty.clone())
+    }
+
     fn infer_lvalue(&mut self, expression: &Expr) -> Option<Lvalue> {
         match &expression.kind {
             ExprKind::Variable(name) => match self.binding(name) {
                 Some(binding) => Some(Lvalue {
                     ty: binding.ty,
-                    mutable: binding.mutable,
+                    mutability: binding.mutability,
                     root_name: name.clone(),
                 }),
                 None => {
@@ -1158,7 +1513,41 @@ impl<'a> FunctionChecker<'a> {
                 self.check_constant_index(index, length);
                 Some(Lvalue {
                     ty: element,
-                    mutable: root.mutable,
+                    mutability: root.mutability,
+                    root_name: root.root_name,
+                })
+            }
+            ExprKind::Field {
+                base,
+                name,
+                name_span,
+            } => {
+                let root = self.infer_lvalue(base)?;
+                let ValueType::Struct(struct_name) = &root.ty else {
+                    self.error(
+                        format!("type `{}` has no fields", root.ty.name()),
+                        *name_span,
+                    );
+                    return None;
+                };
+                let Some(declaration) = self.structs.get(struct_name) else {
+                    self.error(format!("unknown struct type `{struct_name}`"), base.span);
+                    return None;
+                };
+                let Some(field) = declaration
+                    .fields
+                    .iter()
+                    .find(|field| field.name == name.as_str())
+                else {
+                    self.error(
+                        format!("type `{struct_name}` has no field named `{name}`"),
+                        *name_span,
+                    );
+                    return None;
+                };
+                Some(Lvalue {
+                    ty: field.ty.clone(),
+                    mutability: root.mutability,
                     root_name: root.root_name,
                 })
             }
@@ -1221,16 +1610,16 @@ impl<'a> FunctionChecker<'a> {
             .rev()
             .find_map(|scope| scope.get(name).cloned())
             .or_else(|| {
-                self.globals
-                    .get(name)
-                    .cloned()
-                    .map(|ty| Binding { ty, mutable: true })
+                self.globals.get(name).cloned().map(|ty| Binding {
+                    ty,
+                    mutability: Mutability::Mutable,
+                })
             })
             .or_else(|| {
-                self.constants
-                    .get(name)
-                    .cloned()
-                    .map(|ty| Binding { ty, mutable: false })
+                self.constants.get(name).cloned().map(|ty| Binding {
+                    ty,
+                    mutability: Mutability::Constant,
+                })
             })
     }
 
@@ -1256,6 +1645,7 @@ enum VisitState {
 struct ConstantEvaluator<'a> {
     definitions: HashMap<String, ConstantDefinition>,
     globals: &'a HashMap<String, ValueType>,
+    structs: &'a HashMap<String, StructDecl>,
     invalid: &'a HashSet<String>,
     states: HashMap<String, VisitState>,
     values: HashMap<String, ConstantValue>,
@@ -1266,11 +1656,13 @@ impl<'a> ConstantEvaluator<'a> {
     fn new(
         definitions: HashMap<String, ConstantDefinition>,
         globals: &'a HashMap<String, ValueType>,
+        structs: &'a HashMap<String, StructDecl>,
         invalid: &'a HashSet<String>,
     ) -> Self {
         Self {
             definitions,
             globals,
+            structs,
             invalid,
             states: HashMap::new(),
             values: builtins::CONSTANTS
@@ -1387,6 +1779,47 @@ impl<'a> ConstantEvaluator<'a> {
         expression: &Expr,
         expected: &ValueType,
     ) -> Result<ConstantValue, Diagnostic> {
+        if let ExprKind::StructLiteral {
+            name,
+            fields: initializers,
+        } = &expression.kind
+        {
+            let ValueType::Struct(expected_name) = expected else {
+                return Err(Diagnostic::new(
+                    "struct literal requires a matching struct type annotation",
+                    expression.span,
+                ));
+            };
+            if name != expected_name {
+                return Err(Diagnostic::new(
+                    format!("expected struct `{expected_name}`, found struct literal `{name}`"),
+                    expression.span,
+                ));
+            }
+            let declaration = self.structs.get(name).cloned().ok_or_else(|| {
+                Diagnostic::new(format!("unknown struct type `{name}`"), expression.span)
+            })?;
+            let mut fields = Vec::with_capacity(declaration.fields.len());
+            for field in &declaration.fields {
+                let initializer = initializers
+                    .iter()
+                    .find(|initializer| initializer.name == field.name)
+                    .ok_or_else(|| {
+                        Diagnostic::new(
+                            format!("missing initializer for field `{}` of `{name}`", field.name),
+                            expression.span,
+                        )
+                    })?;
+                fields.push((
+                    field.name.clone(),
+                    self.evaluate_typed_expr(&initializer.value, &field.ty)?,
+                ));
+            }
+            return Ok(ConstantValue::Struct {
+                name: name.clone(),
+                fields,
+            });
+        }
         if let ExprKind::ArrayLiteral(elements) = &expression.kind {
             let Some((element_type, length)) = expected.resolved_array() else {
                 return Err(Diagnostic::new(
@@ -1421,6 +1854,7 @@ fn evaluate_initializer(
     expected: &ValueType,
     constants: &HashMap<String, ConstantValue>,
     globals: &HashMap<String, ValueType>,
+    structs: &HashMap<String, StructDecl>,
 ) -> Result<ConstantValue, String> {
     let mut lookup = |name: &str| {
         if let Some(value) = constants.get(name).cloned() {
@@ -1437,13 +1871,14 @@ fn evaluate_initializer(
             ))
         }
     };
-    evaluate_typed_expression(expression, expected, &mut lookup)
+    evaluate_typed_expression(expression, expected, structs, &mut lookup)
         .map_err(|diagnostic| diagnostic.message)
 }
 
 fn evaluate_typed_expression<F>(
     expression: &Expr,
     expected: &ValueType,
+    structs: &HashMap<String, StructDecl>,
     mut constant: F,
 ) -> Result<ConstantValue, Diagnostic>
 where
@@ -1452,11 +1887,53 @@ where
     fn evaluate<F>(
         expression: &Expr,
         expected: &ValueType,
+        structs: &HashMap<String, StructDecl>,
         constant: &mut F,
     ) -> Result<ConstantValue, Diagnostic>
     where
         F: FnMut(&str) -> Result<ConstantValue, Diagnostic>,
     {
+        if let ExprKind::StructLiteral {
+            name,
+            fields: initializers,
+        } = &expression.kind
+        {
+            let ValueType::Struct(expected_name) = expected else {
+                return Err(Diagnostic::new(
+                    "struct literal requires a matching struct type annotation",
+                    expression.span,
+                ));
+            };
+            if name != expected_name {
+                return Err(Diagnostic::new(
+                    format!("expected struct `{expected_name}`, found struct literal `{name}`"),
+                    expression.span,
+                ));
+            }
+            let declaration = structs.get(name).ok_or_else(|| {
+                Diagnostic::new(format!("unknown struct type `{name}`"), expression.span)
+            })?;
+            let mut fields = Vec::with_capacity(declaration.fields.len());
+            for field in &declaration.fields {
+                let initializer = initializers
+                    .iter()
+                    .find(|initializer| initializer.name == field.name)
+                    .ok_or_else(|| {
+                        Diagnostic::new(
+                            format!("missing initializer for field `{}` of `{name}`", field.name),
+                            expression.span,
+                        )
+                    })?;
+                fields.push((
+                    field.name.clone(),
+                    evaluate(&initializer.value, &field.ty, structs, constant)?,
+                ));
+            }
+            return Ok(ConstantValue::Struct {
+                name: name.clone(),
+                fields,
+            });
+        }
         if let ExprKind::ArrayLiteral(elements) = &expression.kind {
             let Some((element_type, length)) = expected.resolved_array() else {
                 return Err(Diagnostic::new(
@@ -1475,7 +1952,7 @@ where
             }
             let mut values = Vec::with_capacity(elements.len());
             for element in elements {
-                values.push(evaluate(element, element_type, constant)?);
+                values.push(evaluate(element, element_type, structs, constant)?);
             }
             return Ok(ConstantValue::Array {
                 element_type: Box::new(element_type.clone()),
@@ -1485,7 +1962,7 @@ where
         evaluate_expression(expression, constant)
     }
 
-    evaluate(expression, expected, &mut constant)
+    evaluate(expression, expected, structs, &mut constant)
 }
 
 fn evaluate_expression<F>(expression: &Expr, mut constant: F) -> Result<ConstantValue, Diagnostic>
@@ -1507,6 +1984,9 @@ where
             ExprKind::ArrayLiteral(_) => Err(invalid(
                 "array literal requires an explicit array type annotation".into(),
             )),
+            ExprKind::StructLiteral { name, .. } => Err(invalid(format!(
+                "struct literal `{name}` requires its declared struct type"
+            ))),
             ExprKind::Variable(name) => constant(name),
             ExprKind::Index { base, index } => {
                 let base = evaluate(base, constant)?;
@@ -1529,6 +2009,22 @@ where
                         elements.len()
                     ))
                 })
+            }
+            ExprKind::Field { base, name, .. } => {
+                let base = evaluate(base, constant)?;
+                let ConstantValue::Struct {
+                    name: struct_name,
+                    fields,
+                } = base
+                else {
+                    return Err(invalid("only struct values have fields".into()));
+                };
+                fields
+                    .into_iter()
+                    .find_map(|(field_name, value)| (field_name == *name).then_some(value))
+                    .ok_or_else(|| {
+                        invalid(format!("type `{struct_name}` has no field named `{name}`"))
+                    })
             }
             ExprKind::Call { name, .. } => Err(invalid(format!(
                 "constant expressions cannot call function `{name}`"
@@ -1615,6 +2111,9 @@ fn convert_constant(target: ValueType, source: ConstantValue) -> Result<Constant
         (ValueType::Bool, _) => Err("numeric conversions may only target `i32` or `f32`".into()),
         (ValueType::Array { .. }, _) | (_, ConstantValue::Array { .. }) => {
             Err("arrays cannot be converted to numeric types".into())
+        }
+        (ValueType::Struct(_), _) | (_, ConstantValue::Struct { .. }) => {
+            Err("struct values cannot be converted to numeric types".into())
         }
     }
 }
