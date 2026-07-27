@@ -117,6 +117,27 @@ draw {}
 }
 
 #[test]
+fn shadowing_struct_names_can_bound_a_range() {
+    let output = run_source(
+        "range_bound_shadowing",
+        r#"game "Range Bound Shadowing"
+struct Limit {}
+fn print_to(Limit: i32) -> void {
+    for i in 0..Limit { print_i32(i) }
+}
+start {
+    let Limit: i32 = 2
+    for i in 0..Limit { print_i32(i) }
+    print_to(3)
+}
+update(dt: f32) {}
+draw {}
+"#,
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "0\n1\n0\n1\n2\n");
+}
+
+#[test]
 fn final_platform_example_iterates_struct_array_and_verifies_llvm() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let work = root.join("target/range_platform_e2e");
