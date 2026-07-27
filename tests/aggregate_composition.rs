@@ -82,13 +82,27 @@ fn make_level() -> Level {
 }
 start {
     let index: i32 = 1
-    print_i32(make_level().positions[index])
+    let iteration: i32 = 0
+    while iteration < 2 {
+        print_i32(make_level().positions[index])
+        iteration += 1
+    }
 }
 update(dt: f32) {}
 draw {}
 "#;
     let ir = speck::compile_to_llvm(source).expect("aggregate rvalue indexing should compile");
-    assert!(ir.contains("alloca [2 x i32]"));
+    let start_ir = ir
+        .split("define void @spk_start")
+        .nth(1)
+        .expect("start function should be emitted");
+    let scratch = start_ir
+        .find("alloca [2 x i32]")
+        .expect("aggregate scratch storage should be emitted");
+    let loop_condition = start_ir
+        .find("while_condition")
+        .expect("test loop should be emitted");
+    assert!(scratch < loop_condition, "scratch storage must be hoisted");
     assert!(ir.contains("getelementptr inbounds [2 x i32]"));
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -102,7 +116,7 @@ draw {}
         .output()
         .expect("rvalue index example should start");
     assert_success("aggregate rvalue indexing", &run);
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "9\n");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "9\n9\n");
 }
 
 #[test]

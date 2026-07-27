@@ -641,8 +641,7 @@ impl<'a> FunctionEmitter<'a> {
                         .expect("semantic checking guarantees array index bases");
                     let element_type = element_type.clone();
                     let array_type = llvm_value_type(&base_type);
-                    let storage = self.temp();
-                    self.instruction(format!("{storage} = alloca {array_type}"));
+                    let storage = self.entry_alloca(&array_type);
                     self.instruction(format!("store {array_type} {}, ptr {storage}", base.repr));
                     let index = self.expression(index);
                     self.bounds_check(&index.repr, length);
@@ -961,6 +960,13 @@ impl<'a> FunctionEmitter<'a> {
         let name = format!("%t{}", self.next_temp);
         self.next_temp += 1;
         name
+    }
+
+    fn entry_alloca(&mut self, llvm_type: &str) -> String {
+        let pointer = self.temp();
+        self.lines
+            .insert(2, format!("  {pointer} = alloca {llvm_type}"));
+        pointer
     }
 
     fn label(&mut self, prefix: &str) -> String {
