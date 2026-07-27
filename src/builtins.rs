@@ -33,7 +33,7 @@ pub const FUNCTIONS: &[BuiltinFunction] = &[
     },
     BuiltinFunction {
         name: "fill_rect",
-        params: &[ValueType::I32; 7],
+        params: &[const { ValueType::I32 }; 7],
         return_type: ReturnType::Void,
         llvm_symbol: "@crumb_fill_rect",
     },
@@ -114,5 +114,5 @@ pub fn predefined_constant(name: &str) -> Option<ConstantValue> {
     CONSTANTS
         .iter()
         .find(|constant| constant.name == name)
-        .map(|constant| constant.value)
+        .map(|constant| constant.value.clone())
 }

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::ast::{
-    AssignOp, BinaryOp, Block, ConstantValue, Expr, ExprKind, Function, FunctionKind, Program,
-    ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
+    ArrayLength, AssignOp, BinaryOp, Block, ConstantValue, Expr, ExprKind, Function, FunctionKind,
+    Program, ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
 };
 use crate::builtins;
 
@@ -30,6 +30,7 @@ impl Value {
         self.ty
             .value_type()
             .expect("semantic checking guarantees a value in this context")
+            .clone()
     }
 }
 
@@ -39,14 +40,14 @@ pub fn emit(program: &Program) -> String {
 
 pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String {
     let functions = function_signatures(program);
-    let globals: HashMap<_, _> = program
+    let mut globals: HashMap<_, _> = program
         .globals
         .iter()
         .map(|global| {
             (
                 global.name.clone(),
                 Variable {
-                    ty: global.ty,
+                    ty: global.ty.clone(),
                     pointer: format!("@spk_global_{}", global.name),
                 },
             )
@@ -54,16 +55,32 @@ pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String
         .collect();
     let mut constants = builtins::CONSTANTS
         .iter()
-        .map(|constant| (constant.name.to_owned(), constant.value))
+        .map(|constant| (constant.name.to_owned(), constant.value.clone()))
         .collect::<HashMap<_, _>>();
     constants.extend(program.constants.iter().map(|constant| {
         (
             constant.name.clone(),
             constant
                 .value
+                .clone()
                 .expect("semantic checking evaluates every constant"),
         )
     }));
+    for constant in &program.constants {
+        let value = constant
+            .value
+            .as_ref()
+            .expect("semantic checking evaluates every constant");
+        if matches!(value, ConstantValue::Array { .. }) {
+            globals.insert(
+                constant.name.clone(),
+                Variable {
+                    ty: constant.ty.clone(),
+                    pointer: format!("@spk_const_{}", constant.name),
+                },
+            );
+        }
+    }
 
     let mut output = String::new();
     writeln!(
@@ -82,33 +99,56 @@ pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String
         let params = builtin
             .params
             .iter()
-            .map(|ty| llvm_value_type(*ty))
+            .map(llvm_value_type)
             .collect::<Vec<_>>()
             .join(", ");
         writeln!(
             output,
             "declare {} {}({params})",
-            llvm_return_type(builtin.return_type),
+            llvm_return_type(&builtin.return_type),
             builtin.llvm_symbol
         )
         .expect("writing to a string cannot fail");
     }
+    output.push_str("declare void @crumb_bounds_fail(i32, i32)\n");
     output.push('\n');
 
+    for constant in &program.constants {
+        let value = constant
+            .value
+            .as_ref()
+            .expect("semantic checking evaluates every constant");
+        if matches!(value, ConstantValue::Array { .. }) {
+            writeln!(
+                output,
+                "@spk_const_{} = internal constant {} {}",
+                constant.name,
+                llvm_value_type(&constant.ty),
+                llvm_constant(value)
+            )
+            .expect("writing to a string cannot fail");
+        }
+    }
     for global in &program.globals {
         let value = global
             .value
+            .as_ref()
             .expect("semantic checking evaluates every global initializer");
         writeln!(
             output,
             "@spk_global_{} = internal global {} {}",
             global.name,
-            llvm_value_type(global.ty),
+            llvm_value_type(&global.ty),
             llvm_constant(value)
         )
         .expect("writing to a string cannot fail");
     }
-    if !program.globals.is_empty() {
+    if !program.globals.is_empty()
+        || program
+            .constants
+            .iter()
+            .any(|constant| matches!(constant.value, Some(ConstantValue::Array { .. })))
+    {
         output.push('\n');
     }
 
@@ -130,7 +170,7 @@ fn function_signatures(program: &Program) -> HashMap<String, Signature> {
             (
                 builtin.name.to_owned(),
                 Signature {
-                    return_type: builtin.return_type,
+                    return_type: builtin.return_type.clone(),
                     symbol: builtin.llvm_symbol.to_owned(),
                 },
             )
@@ -141,7 +181,7 @@ fn function_signatures(program: &Program) -> HashMap<String, Signature> {
             signatures.insert(
                 function.name.clone(),
                 Signature {
-                    return_type: function.return_type,
+                    return_type: function.return_type.clone(),
                     symbol: format!("@spk_fn_{}", function.name),
                 },
             );
@@ -190,7 +230,7 @@ impl<'a> FunctionEmitter<'a> {
             .params
             .iter()
             .enumerate()
-            .map(|(index, param)| format!("{} %arg{index}", llvm_value_type(param.ty)))
+            .map(|(index, param)| format!("{} %arg{index}", llvm_value_type(&param.ty)))
             .collect::<Vec<_>>()
             .join(", ");
         let symbol = match self.function.kind {
@@ -202,21 +242,21 @@ impl<'a> FunctionEmitter<'a> {
 
         self.lines.push(format!(
             "define {} @{symbol}({params}) {{",
-            llvm_return_type(self.function.return_type)
+            llvm_return_type(&self.function.return_type)
         ));
         self.lines.push("entry:".into());
 
         for (index, param) in self.function.params.iter().enumerate() {
             let pointer = self.temp();
-            self.instruction(format!("{pointer} = alloca {}", llvm_value_type(param.ty)));
+            self.instruction(format!("{pointer} = alloca {}", llvm_value_type(&param.ty)));
             self.instruction(format!(
                 "store {} %arg{index}, ptr {pointer}",
-                llvm_value_type(param.ty)
+                llvm_value_type(&param.ty)
             ));
             self.scopes[0].insert(
                 param.name.clone(),
                 Variable {
-                    ty: param.ty,
+                    ty: param.ty.clone(),
                     pointer,
                 },
             );
@@ -252,34 +292,40 @@ impl<'a> FunctionEmitter<'a> {
     fn statement(&mut self, statement: &Stmt) {
         match &statement.kind {
             StmtKind::Let { name, ty, init } => {
-                let value = self.expression(init);
+                let value = self.expression_as(init, ty);
                 let pointer = self.temp();
-                self.instruction(format!("{pointer} = alloca {}", llvm_value_type(*ty)));
+                self.instruction(format!("{pointer} = alloca {}", llvm_value_type(ty)));
                 self.instruction(format!(
                     "store {} {}, ptr {pointer}",
-                    llvm_value_type(*ty),
+                    llvm_value_type(ty),
                     value.repr
                 ));
                 self.scopes
                     .last_mut()
                     .expect("a function always has a local scope")
-                    .insert(name.clone(), Variable { ty: *ty, pointer });
+                    .insert(
+                        name.clone(),
+                        Variable {
+                            ty: ty.clone(),
+                            pointer,
+                        },
+                    );
             }
-            StmtKind::Assign { name, op, value } => {
+            StmtKind::Assign { target, op, value } => {
                 let variable = self
-                    .variable(name)
+                    .lvalue(target)
                     .expect("semantic checking guarantees assignment targets");
                 let value = if *op == AssignOp::Set {
-                    self.expression(value)
+                    self.expression_as(value, &variable.ty)
                 } else {
                     let temp = self.temp();
                     self.instruction(format!(
                         "{temp} = load {}, ptr {}",
-                        llvm_value_type(variable.ty),
+                        llvm_value_type(&variable.ty),
                         variable.pointer
                     ));
                     let left = Value {
-                        ty: variable.ty.into(),
+                        ty: variable.ty.clone().into(),
                         repr: temp,
                     };
                     let right = self.expression(value);
@@ -294,7 +340,7 @@ impl<'a> FunctionEmitter<'a> {
                 };
                 self.instruction(format!(
                     "store {} {}, ptr {}",
-                    llvm_value_type(variable.ty),
+                    llvm_value_type(&variable.ty),
                     value.repr,
                     variable.pointer
                 ));
@@ -313,7 +359,7 @@ impl<'a> FunctionEmitter<'a> {
                     let value = self.expression(value);
                     self.terminate(format!(
                         "ret {} {}",
-                        llvm_value_type(value.value_type()),
+                        llvm_value_type(&value.value_type()),
                         value.repr
                     ));
                 } else {
@@ -389,6 +435,77 @@ impl<'a> FunctionEmitter<'a> {
         self.place_label(&end_label);
     }
 
+    fn expression_as(&mut self, expression: &Expr, expected: &ValueType) -> Value {
+        let ExprKind::ArrayLiteral(elements) = &expression.kind else {
+            return self.expression(expression);
+        };
+        let (element_type, _) = expected
+            .resolved_array()
+            .expect("semantic checking matches array literals to array types");
+        let aggregate_type = llvm_value_type(expected);
+        let element_llvm_type = llvm_value_type(element_type);
+        let mut aggregate = "undef".to_owned();
+        for (index, element) in elements.iter().enumerate() {
+            let value = self.expression_as(element, element_type);
+            let temp = self.temp();
+            self.instruction(format!(
+                "{temp} = insertvalue {aggregate_type} {aggregate}, {element_llvm_type} {}, {index}",
+                value.repr
+            ));
+            aggregate = temp;
+        }
+        Value {
+            ty: expected.clone().into(),
+            repr: aggregate,
+        }
+    }
+
+    fn lvalue(&mut self, expression: &Expr) -> Option<Variable> {
+        match &expression.kind {
+            ExprKind::Variable(name) => self.variable(name),
+            ExprKind::Index { base, index } => {
+                let base = self.lvalue(base)?;
+                let (element_type, length) = base.ty.resolved_array()?;
+                let element_type = element_type.clone();
+                let array_type = llvm_value_type(&base.ty);
+                let index = self.expression(index);
+                self.bounds_check(&index.repr, length);
+                let pointer = self.temp();
+                self.instruction(format!(
+                    "{pointer} = getelementptr inbounds {array_type}, ptr {}, i32 0, i32 {}",
+                    base.pointer, index.repr
+                ));
+                Some(Variable {
+                    ty: element_type,
+                    pointer,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn bounds_check(&mut self, index: &str, length: usize) {
+        let nonnegative = self.temp();
+        self.instruction(format!("{nonnegative} = icmp sge i32 {index}, 0"));
+        let below_length = self.temp();
+        self.instruction(format!("{below_length} = icmp slt i32 {index}, {length}"));
+        let valid = self.temp();
+        self.instruction(format!("{valid} = and i1 {nonnegative}, {below_length}"));
+        let valid_label = self.label("bounds_valid");
+        let failure_label = self.label("bounds_failure");
+        self.terminate(format!(
+            "br i1 {valid}, label %{valid_label}, label %{failure_label}"
+        ));
+
+        self.place_label(&failure_label);
+        self.instruction(format!(
+            "call void @crumb_bounds_fail(i32 {index}, i32 {length})"
+        ));
+        self.terminate("unreachable".into());
+
+        self.place_label(&valid_label);
+    }
+
     fn expression(&mut self, expression: &Expr) -> Value {
         match &expression.kind {
             ExprKind::I32(value) => Value {
@@ -403,12 +520,15 @@ impl<'a> FunctionEmitter<'a> {
                 ty: ValueType::Bool.into(),
                 repr: value.to_string(),
             },
+            ExprKind::ArrayLiteral(_) => {
+                unreachable!("array literals are emitted with their declared type")
+            }
             ExprKind::Variable(name) => {
                 if let Some(variable) = self.variable(name) {
                     let temp = self.temp();
                     self.instruction(format!(
                         "{temp} = load {}, ptr {}",
-                        llvm_value_type(variable.ty),
+                        llvm_value_type(&variable.ty),
                         variable.pointer
                     ));
                     Value {
@@ -419,12 +539,27 @@ impl<'a> FunctionEmitter<'a> {
                     let value = self
                         .constants
                         .get(name)
-                        .copied()
+                        .cloned()
                         .expect("semantic checking guarantees constant references");
                     Value {
                         ty: value.ty().into(),
-                        repr: llvm_constant(value),
+                        repr: llvm_constant(&value),
                     }
+                }
+            }
+            ExprKind::Index { .. } => {
+                let variable = self
+                    .lvalue(expression)
+                    .expect("semantic checking guarantees indexed lvalues");
+                let temp = self.temp();
+                self.instruction(format!(
+                    "{temp} = load {}, ptr {}",
+                    llvm_value_type(&variable.ty),
+                    variable.pointer
+                ));
+                Value {
+                    ty: variable.ty.into(),
+                    repr: temp,
                 }
             }
             ExprKind::Unary { op, operand } => {
@@ -476,7 +611,7 @@ impl<'a> FunctionEmitter<'a> {
                     .iter()
                     .map(|argument| {
                         let value = self.expression(argument);
-                        format!("{} {}", llvm_value_type(value.value_type()), value.repr)
+                        format!("{} {}", llvm_value_type(&value.value_type()), value.repr)
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -490,7 +625,7 @@ impl<'a> FunctionEmitter<'a> {
                     let temp = self.temp();
                     self.instruction(format!(
                         "{temp} = call {} {}({args})",
-                        llvm_return_type(signature.return_type),
+                        llvm_return_type(&signature.return_type),
                         signature.symbol
                     ));
                     Value {
@@ -502,7 +637,7 @@ impl<'a> FunctionEmitter<'a> {
             ExprKind::Conversion { target, args } => {
                 let source = self.expression(&args[0]);
                 let source_type = source.value_type();
-                match (source_type, *target) {
+                match (source_type, target.clone()) {
                     (ValueType::I32, ValueType::I32) | (ValueType::F32, ValueType::F32) => source,
                     (ValueType::I32, ValueType::F32) => {
                         let temp = self.temp();
@@ -629,10 +764,10 @@ impl<'a> FunctionEmitter<'a> {
         let left_type = left.value_type();
         let is_float = left_type == ValueType::F32;
         let (instruction, result_type) = match op {
-            BinaryOp::Add => (if is_float { "fadd" } else { "add" }, left_type),
-            BinaryOp::Subtract => (if is_float { "fsub" } else { "sub" }, left_type),
-            BinaryOp::Multiply => (if is_float { "fmul" } else { "mul" }, left_type),
-            BinaryOp::Divide => (if is_float { "fdiv" } else { "sdiv" }, left_type),
+            BinaryOp::Add => (if is_float { "fadd" } else { "add" }, left_type.clone()),
+            BinaryOp::Subtract => (if is_float { "fsub" } else { "sub" }, left_type.clone()),
+            BinaryOp::Multiply => (if is_float { "fmul" } else { "mul" }, left_type.clone()),
+            BinaryOp::Divide => (if is_float { "fdiv" } else { "sdiv" }, left_type.clone()),
             BinaryOp::Equal => (
                 if is_float { "fcmp oeq" } else { "icmp eq" },
                 ValueType::Bool,
@@ -661,7 +796,7 @@ impl<'a> FunctionEmitter<'a> {
         };
         self.instruction(format!(
             "{temp} = {instruction} {} {}, {}",
-            llvm_value_type(left_type),
+            llvm_value_type(&left_type),
             left.repr,
             right.repr
         ));
@@ -707,26 +842,45 @@ impl<'a> FunctionEmitter<'a> {
     }
 }
 
-fn llvm_value_type(ty: ValueType) -> &'static str {
+fn llvm_value_type(ty: &ValueType) -> String {
     match ty {
-        ValueType::I32 => "i32",
-        ValueType::F32 => "float",
-        ValueType::Bool => "i1",
+        ValueType::I32 => "i32".into(),
+        ValueType::F32 => "float".into(),
+        ValueType::Bool => "i1".into(),
+        ValueType::Array {
+            element,
+            length: ArrayLength::Resolved(length),
+        } => format!("[{length} x {}]", llvm_value_type(element)),
+        ValueType::Array { .. } => {
+            unreachable!("semantic checking resolves every array length before code generation")
+        }
     }
 }
 
-fn llvm_return_type(ty: ReturnType) -> &'static str {
+fn llvm_return_type(ty: &ReturnType) -> String {
     match ty {
         ReturnType::Value(ty) => llvm_value_type(ty),
-        ReturnType::Void => "void",
+        ReturnType::Void => "void".into(),
     }
 }
 
-fn llvm_constant(value: ConstantValue) -> String {
+fn llvm_constant(value: &ConstantValue) -> String {
     match value {
         ConstantValue::I32(value) => value.to_string(),
-        ConstantValue::F32(value) => llvm_float(value),
+        ConstantValue::F32(value) => llvm_float(*value),
         ConstantValue::Bool(value) => value.to_string(),
+        ConstantValue::Array {
+            element_type,
+            elements,
+        } => {
+            let element_type = llvm_value_type(element_type);
+            let elements = elements
+                .iter()
+                .map(|value| format!("{element_type} {}", llvm_constant(value)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{elements}]")
+        }
     }
 }
 

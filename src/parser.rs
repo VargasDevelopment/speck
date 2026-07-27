@@ -1,8 +1,8 @@
 use std::mem::discriminant;
 
 use crate::ast::{
-    AssignOp, BinaryOp, Block, Constant, Expr, ExprKind, Function, FunctionKind, Global, Param,
-    Program, ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
+    ArrayLength, AssignOp, BinaryOp, Block, Constant, Expr, ExprKind, Function, FunctionKind,
+    Global, Param, Program, ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
 };
 use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::{Token, TokenKind};
@@ -198,12 +198,55 @@ impl Parser {
             TokenKind::I32 => Ok(ValueType::I32),
             TokenKind::F32 => Ok(ValueType::F32),
             TokenKind::Bool => Ok(ValueType::Bool),
+            TokenKind::LeftBracket => {
+                let element = self.parse_value_type()?;
+                self.expect(
+                    &TokenKind::Semicolon,
+                    "expected `;` between the array element type and length",
+                )?;
+                let length = if self.take(&TokenKind::Minus) {
+                    let token = self.advance();
+                    let TokenKind::Integer(value) = token.kind else {
+                        return Err(Diagnostic::new(
+                            "expected an integer literal after `-` in array length",
+                            token.span,
+                        ));
+                    };
+                    ArrayLength::Literal {
+                        value: -value,
+                        span: token.span,
+                    }
+                } else {
+                    let token = self.advance();
+                    match token.kind {
+                        TokenKind::Integer(value) => ArrayLength::Literal {
+                            value,
+                            span: token.span,
+                        },
+                        TokenKind::Identifier(name) => ArrayLength::Constant {
+                            name,
+                            span: token.span,
+                        },
+                        _ => {
+                            return Err(Diagnostic::new(
+                                "array length must be a positive integer literal or an `i32` constant",
+                                token.span,
+                            ));
+                        }
+                    }
+                };
+                self.expect(&TokenKind::RightBracket, "expected `]` after array type")?;
+                Ok(ValueType::Array {
+                    element: Box::new(element),
+                    length,
+                })
+            }
             TokenKind::Void => Err(Diagnostic::new(
                 "`void` is only valid as a function return type",
                 token.span,
             )),
             _ => Err(Diagnostic::new(
-                "expected type `i32`, `f32`, or `bool`",
+                "expected type `i32`, `f32`, `bool`, or a fixed array type",
                 token.span,
             )),
         }
@@ -242,11 +285,10 @@ impl Parser {
         if self.at(&TokenKind::Return) {
             return self.return_statement();
         }
-        if matches!(self.current().kind, TokenKind::Identifier(_)) && self.peek_is_assignment() {
-            return self.assignment_statement();
-        }
-
         let expression = self.expression()?;
+        if self.at_assignment_operator() {
+            return self.assignment_statement(expression);
+        }
         let end = self.optional_semicolon().unwrap_or(expression.span);
         let span = expression.span.merge(end);
         Ok(Stmt {
@@ -269,8 +311,8 @@ impl Parser {
         })
     }
 
-    fn assignment_statement(&mut self) -> Result<Stmt, Diagnostic> {
-        let (name, start) = self.identifier("expected a variable name")?;
+    fn assignment_statement(&mut self, target: Expr) -> Result<Stmt, Diagnostic> {
+        let start = target.span;
         let token = self.advance();
         let op = match token.kind {
             TokenKind::Equal => AssignOp::Set,
@@ -288,7 +330,7 @@ impl Parser {
         let value = self.expression()?;
         let end = self.optional_semicolon().unwrap_or(value.span);
         Ok(Stmt {
-            kind: StmtKind::Assign { name, op, value },
+            kind: StmtKind::Assign { target, op, value },
             span: start.merge(end),
         })
     }
@@ -452,8 +494,27 @@ impl Parser {
                 span,
             })
         } else {
-            self.primary()
+            self.postfix()
         }
+    }
+
+    fn postfix(&mut self) -> Result<Expr, Diagnostic> {
+        let mut expression = self.primary()?;
+        while self.take(&TokenKind::LeftBracket) {
+            let index = self.expression()?;
+            let end = self
+                .expect(&TokenKind::RightBracket, "expected `]` after array index")?
+                .span;
+            let span = expression.span.merge(end);
+            expression = Expr {
+                kind: ExprKind::Index {
+                    base: Box::new(expression),
+                    index: Box::new(index),
+                },
+                span,
+            };
+        }
+        Ok(expression)
     }
 
     fn primary(&mut self) -> Result<Expr, Diagnostic> {
@@ -471,6 +532,27 @@ impl Parser {
                 kind: ExprKind::Bool(matches!(token.kind, TokenKind::True)),
                 span: token.span,
             }),
+            TokenKind::LeftBracket => {
+                let mut elements = Vec::new();
+                if !self.at(&TokenKind::RightBracket) {
+                    loop {
+                        elements.push(self.expression()?);
+                        if !self.take(&TokenKind::Comma) {
+                            break;
+                        }
+                        if self.at(&TokenKind::RightBracket) {
+                            break;
+                        }
+                    }
+                }
+                let end = self
+                    .expect(&TokenKind::RightBracket, "expected `]` after array literal")?
+                    .span;
+                Ok(Expr {
+                    kind: ExprKind::ArrayLiteral(elements),
+                    span: token.span.merge(end),
+                })
+            }
             TokenKind::Identifier(name) => {
                 if !self.take(&TokenKind::LeftParen) {
                     return Ok(Expr {
@@ -566,17 +648,15 @@ impl Parser {
         discriminant(&self.current().kind) == discriminant(kind)
     }
 
-    fn peek_is_assignment(&self) -> bool {
-        self.tokens.get(self.cursor + 1).is_some_and(|token| {
-            matches!(
-                token.kind,
-                TokenKind::Equal
-                    | TokenKind::PlusEqual
-                    | TokenKind::MinusEqual
-                    | TokenKind::StarEqual
-                    | TokenKind::SlashEqual
-            )
-        })
+    fn at_assignment_operator(&self) -> bool {
+        matches!(
+            self.current().kind,
+            TokenKind::Equal
+                | TokenKind::PlusEqual
+                | TokenKind::MinusEqual
+                | TokenKind::StarEqual
+                | TokenKind::SlashEqual
+        )
     }
 
     fn current(&self) -> &Token {
@@ -652,6 +732,41 @@ draw {}
         assert!(matches!(
             program.functions[0].body[0].kind,
             StmtKind::If { .. }
+        ));
+    }
+
+    #[test]
+    fn parses_array_types_literals_indexing_and_indexed_assignment() {
+        let program = parse_source(
+            r#"game "Arrays"
+const COUNT: i32 = 3
+let values: [i32; COUNT] = [1, 2, 3]
+start { let value: i32 = values[1] values[2] += value }
+update(dt: f32) {}
+draw {}
+"#,
+        );
+        assert!(matches!(
+            program.globals[0].ty,
+            ValueType::Array {
+                length: ArrayLength::Constant { .. },
+                ..
+            }
+        ));
+        assert!(matches!(
+            program.globals[0].init.kind,
+            ExprKind::ArrayLiteral(_)
+        ));
+        assert!(matches!(
+            program.functions[0].body[1].kind,
+            StmtKind::Assign {
+                target: Expr {
+                    kind: ExprKind::Index { .. },
+                    ..
+                },
+                op: AssignOp::Add,
+                ..
+            }
         ));
     }
 

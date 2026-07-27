@@ -1,0 +1,21 @@
+game "Array Values"
+
+const VALUE_COUNT: i32 = 4
+
+let values: [i32; VALUE_COUNT] = [2, 4, 6, 8]
+
+start {
+    let index: i32 = 0
+    let total: i32 = 0
+    while index < VALUE_COUNT {
+        total += values[index]
+        index += 1
+    }
+    values[2] += 5
+    print_i32(total)
+    print_i32(values[2])
+}
+
+update(dt: f32) {}
+
+draw {}

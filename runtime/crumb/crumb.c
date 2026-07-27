@@ -7,11 +7,11 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #if defined(CRUMB_DEVELOPMENT) || defined(CRUMB_COCOA)
 #include <errno.h>
 #include <limits.h>
-#include <stdlib.h>
 #endif
 
 #ifdef CRUMB_PACED
@@ -118,6 +118,11 @@ float crumb_frame_delta(void) { return 1.0f / 60.0f; }
 void crumb_print_i32(int value) { printf("%d\n", value); }
 
 void crumb_debug_frame(int frame, float value) { printf("frame %d: %.3f\n", frame, (double)value); }
+
+void crumb_bounds_fail(int index, int length) {
+    fprintf(stderr, "Speck array index %d is out of bounds for length %d\n", index, length);
+    exit(EXIT_FAILURE);
+}
 
 void crumb_shutdown(void) {
     crumb_input_release_all();

@@ -38,6 +38,10 @@ cargo run -- build examples/crumb_bum.spk
 cargo run -- build examples/delta_rectangle.spk
 ./build/delta_rectangle
 
+# Fixed native arrays with checked indexing
+cargo run -- build examples/array_values.spk
+./build/array_values
+
 # Infrastructure-only framebuffer verification
 cargo run -- build examples/framebuffer_rect.spk
 ./build/framebuffer_rect
@@ -109,7 +113,9 @@ HTTP, TCP, and presenter events remain below the Speck/CRuMB boundary.
 
 This is an honest small compiler/runtime slice, not a general-purpose language
 or a finished tiny-game platform. There is no heap, garbage collector, audio,
-arrays, modules, or asset system. Input is limited to eleven fixed digital keys;
+dynamic arrays, slices, modules, or asset system. Fixed-size explicitly typed
+arrays use native value storage and checked `i32` indexing. Input is limited to
+eleven fixed digital keys;
 there is no mouse, controller, text entry, rebinding, or arbitrary key
 enumeration. Graphics are currently limited to clearing the software
 framebuffer and drawing clipped filled rectangles. The Cocoa presenter is a

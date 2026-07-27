@@ -27,13 +27,15 @@ linking live in `toolchain.rs`, keeping the emitter independent of LLVM's API.
 A future library-based backend can therefore replace the emitter without
 changing parsing or semantics.
 
-The validated AST now distinguishes `ValueType` (`i32`, `f32`, and `bool`) from
-`ReturnType` (a value type or `void`). Semantic analysis collects constant,
-global, and function names before checking bodies. A small dependency-walking
-constant evaluator annotates top-level constants and mutable-global
-initializers with their values, detects cycles and checked-expression errors,
-and lets LLVM inline constants without storage. This remains small enough that
-a separate HIR would duplicate rather than simplify the pipeline.
+The validated AST distinguishes `ValueType` (scalars and fixed arrays) from
+`ReturnType` (a value type or `void`). Array lengths retain their source form
+until semantic analysis resolves positive literals and `i32` constants.
+Semantic analysis collects constant, global, and function names before checking
+bodies. A small dependency-walking constant evaluator annotates top-level
+constants and mutable-global initializers with scalar or aggregate values,
+detects cycles and checked-expression errors, and lets LLVM emit native
+initializers. This remains small enough that a separate HIR would duplicate
+rather than simplify the pipeline.
 
 Boolean `&&` and `||` lower directly to branches and merge phi nodes. Numeric
 compound assignment lowers to one target load, one right-expression evaluation,
@@ -42,6 +44,21 @@ conversion branches around the potentially unsafe `fptosi`: NaN, high, and low
 paths produce zero or a clamp value, and only a proven in-range path executes
 the conversion. User functions and all effect-only CRuMB declarations emit
 actual LLVM `void`, `call void`, and `ret void` forms.
+
+Assignment targets now retain expression structure. Semantic lvalue validation
+walks from an indexed element back to its root binding, carries the element type
+and root mutability forward, and rejects non-addressable expressions or any
+write rooted in `const`. LLVM lowering performs the same validated path walk to
+produce a pointer. Fixed arrays lower to ordinary `[N x T]` LLVM values and
+storage; local literals use `insertvalue`, globals use native aggregate
+initializers, and element addresses use `getelementptr`.
+
+Each dynamic array access emits signed nonnegative and upper-bound comparisons.
+The valid branch alone executes an `inbounds getelementptr`; the failure branch
+calls `crumb_bounds_fail(index, length)` and is unreachable afterward. The
+CRuMB helper is a 39-byte function in the audited Linux object plus its
+diagnostic string. Link-section garbage collection removes it from programs
+that never perform checked indexing.
 
 `toolchain.rs` contains the deliberately small host abstraction. It recognizes
 only Linux x86-64 and macOS ARM64, and owns the object/executable suffixes,
@@ -66,6 +83,11 @@ digital-key queries, orderly quit requests, and shutdown. A normal headless
 build executes five deterministic 1/60-second frames without wall-clock pacing
 or host input. Browser development and native Cocoa builds are paced and
 unbounded by default, with the same private finite override for tests.
+
+The public ABI also contains the deliberately narrow array-bounds failure hook.
+It reports the invalid index and fixed length to standard error and terminates;
+it does not introduce an exception, allocator, generalized panic object, or
+runtime array metadata.
 
 CRuMB's graphics path is split by responsibility:
 

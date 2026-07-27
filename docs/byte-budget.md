@@ -20,6 +20,32 @@ The separately selected browser-development game executable for
 native TCP frame sender but not the HTTP server or HTML. It is a development
 artifact and is not a normal game distribution.
 
+## Fixed-array slice measurement
+
+On the 2026-07-27 Linux x86-64 development host, a same-checkout build of
+`framebuffer_rect.spk` measured **6,640 bytes** both immediately before and
+after the fixed-array slice. The bounds helper is section-garbage-collected when
+unused. The new `array_values.spk` example, which loops over a mutable
+four-element array and performs checked reads and a compound indexed write,
+measured **6,432 bytes**. A minimal program that reaches the runtime failure
+path measured **6,544 bytes**.
+
+The CRuMB bounds function contributes 39 bytes of `.text` in its Linux object,
+plus its diagnostic string and any link metadata when referenced. Arrays
+themselves add no runtime header or allocator dependency. These figures were
+collected with:
+
+```sh
+cargo run --quiet -- build examples/framebuffer_rect.spk
+wc -c build/framebuffer_rect
+size build/framebuffer_rect
+
+cargo run --quiet -- build examples/array_values.spk
+wc -c build/array_values
+size build/array_values
+nm -S --size-sort build/crumb_ppm_crumb.o
+```
+
 ## Measured macOS ARM64 artifact
 
 On the audited macOS 26.5.2 ARM64 host, the native Cocoa build of

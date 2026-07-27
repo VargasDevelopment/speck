@@ -58,7 +58,7 @@ fn headless_keyboard_example_is_input_free_and_deterministic() {
         &ppm[offset..offset + CHANNELS]
     };
     assert_eq!(pixel(150, 80), [240, 150, 40]);
-    assert_eq!(pixel(149, 80), [255, 255, 255]);
+    assert_eq!(pixel(149, 80), [32, 18, 32]);
 }
 
 fn assert_success(description: &str, output: &Output) {

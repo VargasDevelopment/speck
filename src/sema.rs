@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    AssignOp, BinaryOp, Block, ConstantValue, Expr, ExprKind, Function, FunctionKind, Program,
-    ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
+    ArrayLength, AssignOp, BinaryOp, Block, ConstantValue, Expr, ExprKind, Function, FunctionKind,
+    Program, ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
 };
 use crate::builtins;
 use crate::diagnostic::{Diagnostic, Span};
@@ -13,7 +13,7 @@ struct Signature {
     return_type: ReturnType,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Binding {
     ty: ValueType,
     mutable: bool,
@@ -21,6 +21,7 @@ struct Binding {
 
 pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
+    resolve_program_types(program, &mut diagnostics);
     let mut constants = builtins::CONSTANTS
         .iter()
         .map(|constant| (constant.name.to_owned(), constant.value.ty()))
@@ -48,7 +49,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
             continue;
         }
         if constants
-            .insert(constant.name.clone(), constant.ty)
+            .insert(constant.name.clone(), constant.ty.clone())
             .is_some()
         {
             diagnostics.push(Diagnostic::new(
@@ -68,7 +69,10 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
     }
 
     for global in &program.globals {
-        if globals.insert(global.name.clone(), global.ty).is_some() {
+        if globals
+            .insert(global.name.clone(), global.ty.clone())
+            .is_some()
+        {
             diagnostics.push(Diagnostic::new(
                 format!("global `{}` is declared more than once", global.name),
                 global.span,
@@ -121,8 +125,12 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
     for function in &program.functions {
         if function.kind == FunctionKind::Named {
             let signature = Signature {
-                params: function.params.iter().map(|param| param.ty).collect(),
-                return_type: function.return_type,
+                params: function
+                    .params
+                    .iter()
+                    .map(|param| param.ty.clone())
+                    .collect(),
+                return_type: function.return_type.clone(),
             };
             if functions.insert(function.name.clone(), signature).is_some() {
                 diagnostics.push(Diagnostic::new(
@@ -167,15 +175,21 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         }
     }
 
+    let predefined_values = builtins::CONSTANTS
+        .iter()
+        .map(|constant| (constant.name.to_owned(), constant.value.clone()))
+        .collect::<HashMap<_, _>>();
     for constant in &program.constants {
         let mut checker = FunctionChecker::new(
             &globals,
             &constants,
+            &predefined_values,
             &functions,
             ReturnType::Void,
             &mut diagnostics,
         );
-        if let Some(actual) = checker.require_value(&constant.init, "constant initializer")
+        if let Some(actual) =
+            checker.require_value_as(&constant.init, &constant.ty, "constant initializer")
             && actual != constant.ty
         {
             checker.error(
@@ -194,11 +208,13 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         let mut checker = FunctionChecker::new(
             &globals,
             &constants,
+            &predefined_values,
             &functions,
             ReturnType::Void,
             &mut diagnostics,
         );
-        if let Some(actual) = checker.require_value(&global.init, "global initializer")
+        if let Some(actual) =
+            checker.require_value_as(&global.init, &global.ty, "global initializer")
             && actual != global.ty
         {
             checker.error(
@@ -220,7 +236,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
             (
                 constant.name.clone(),
                 ConstantDefinition {
-                    ty: constant.ty,
+                    ty: constant.ty.clone(),
                     init: constant.init.clone(),
                     span: constant.span,
                 },
@@ -243,14 +259,14 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
     }
     let evaluated_constants = evaluator.values.clone();
     for constant in &mut program.constants {
-        constant.value = evaluated_constants.get(&constant.name).copied();
+        constant.value = evaluated_constants.get(&constant.name).cloned();
     }
 
     for (index, global) in program.globals.iter_mut().enumerate() {
         if invalid_globals.contains(&index) {
             continue;
         }
-        match evaluate_initializer(&global.init, &evaluated_constants, &globals) {
+        match evaluate_initializer(&global.init, &global.ty, &evaluated_constants, &globals) {
             Ok(value) if value.ty() == global.ty => global.value = Some(value),
             Ok(_) => {}
             Err(message) => diagnostics.push(Diagnostic::new(message, global.init.span)),
@@ -266,7 +282,14 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
                 function.span,
             ));
         }
-        check_function(function, &globals, &constants, &functions, &mut diagnostics);
+        check_function(
+            function,
+            &globals,
+            &constants,
+            &evaluated_constants,
+            &functions,
+            &mut diagnostics,
+        );
     }
 
     if diagnostics.is_empty() {
@@ -274,6 +297,183 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
     } else {
         Err(diagnostics)
     }
+}
+
+#[derive(Clone)]
+struct LengthConstantDefinition {
+    ty: ValueType,
+    init: Expr,
+    span: Span,
+}
+
+struct LengthConstantEvaluator {
+    definitions: HashMap<String, LengthConstantDefinition>,
+    values: HashMap<String, i32>,
+    visiting: Vec<String>,
+}
+
+impl LengthConstantEvaluator {
+    fn new(program: &Program) -> Self {
+        Self {
+            definitions: program
+                .constants
+                .iter()
+                .map(|constant| {
+                    (
+                        constant.name.clone(),
+                        LengthConstantDefinition {
+                            ty: constant.ty.clone(),
+                            init: constant.init.clone(),
+                            span: constant.span,
+                        },
+                    )
+                })
+                .collect(),
+            values: builtins::CONSTANTS
+                .iter()
+                .filter_map(|constant| match constant.value {
+                    ConstantValue::I32(value) => Some((constant.name.to_owned(), value)),
+                    _ => None,
+                })
+                .collect(),
+            visiting: Vec::new(),
+        }
+    }
+
+    fn evaluate(&mut self, name: &str, usage_span: Span) -> Result<i32, Diagnostic> {
+        if let Some(value) = self.values.get(name) {
+            return Ok(*value);
+        }
+        let Some(definition) = self.definitions.get(name).cloned() else {
+            return Err(Diagnostic::new(
+                format!("unknown array-length constant `{name}`"),
+                usage_span,
+            ));
+        };
+        if definition.ty != ValueType::I32 {
+            return Err(Diagnostic::new(
+                format!("array length constant `{name}` must have type `i32`"),
+                usage_span,
+            ));
+        }
+        if let Some(start) = self.visiting.iter().position(|item| item == name) {
+            let mut cycle = self.visiting[start..].to_vec();
+            cycle.push(name.to_owned());
+            return Err(Diagnostic::new(
+                format!("cyclic array-length constant: {}", cycle.join(" -> ")),
+                definition.span,
+            ));
+        }
+
+        self.visiting.push(name.to_owned());
+        let result = evaluate_expression(&definition.init, |dependency| {
+            self.evaluate(dependency, definition.init.span)
+                .map(ConstantValue::I32)
+        });
+        self.visiting.pop();
+        let value = match result? {
+            ConstantValue::I32(value) => value,
+            _ => {
+                return Err(Diagnostic::new(
+                    format!("array length constant `{name}` must evaluate to `i32`"),
+                    usage_span,
+                ));
+            }
+        };
+        self.values.insert(name.to_owned(), value);
+        Ok(value)
+    }
+}
+
+fn resolve_program_types(program: &mut Program, diagnostics: &mut Vec<Diagnostic>) {
+    let snapshot = program.clone();
+    let mut evaluator = LengthConstantEvaluator::new(&snapshot);
+
+    for constant in &mut program.constants {
+        resolve_value_type(&mut constant.ty, &mut evaluator, diagnostics);
+    }
+    for global in &mut program.globals {
+        resolve_value_type(&mut global.ty, &mut evaluator, diagnostics);
+    }
+    for function in &mut program.functions {
+        for param in &mut function.params {
+            resolve_value_type(&mut param.ty, &mut evaluator, diagnostics);
+        }
+        if let ReturnType::Value(ty) = &mut function.return_type {
+            resolve_value_type(ty, &mut evaluator, diagnostics);
+        }
+        resolve_block_types(&mut function.body, &mut evaluator, diagnostics);
+    }
+}
+
+fn resolve_block_types(
+    block: &mut Block,
+    evaluator: &mut LengthConstantEvaluator,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for statement in block {
+        match &mut statement.kind {
+            StmtKind::Let { ty, .. } => resolve_value_type(ty, evaluator, diagnostics),
+            StmtKind::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                resolve_block_types(then_block, evaluator, diagnostics);
+                if let Some(else_block) = else_block {
+                    resolve_block_types(else_block, evaluator, diagnostics);
+                }
+            }
+            StmtKind::While { body, .. } => {
+                resolve_block_types(body, evaluator, diagnostics);
+            }
+            StmtKind::Assign { .. } | StmtKind::Expr(_) | StmtKind::Return(_) => {}
+        }
+    }
+}
+
+fn resolve_value_type(
+    ty: &mut ValueType,
+    evaluator: &mut LengthConstantEvaluator,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let ValueType::Array { element, length } = ty else {
+        return;
+    };
+    resolve_value_type(element, evaluator, diagnostics);
+    let result = match length.clone() {
+        ArrayLength::Literal { value, span } => {
+            positive_array_length(value, span).map(ArrayLength::Resolved)
+        }
+        ArrayLength::Constant { name, span } => evaluator
+            .evaluate(&name, span)
+            .and_then(|value| positive_array_length(i64::from(value), span))
+            .map(ArrayLength::Resolved),
+        ArrayLength::Resolved(value) => Ok(ArrayLength::Resolved(value)),
+    };
+    match result {
+        Ok(resolved) => *length = resolved,
+        Err(diagnostic) => {
+            diagnostics.push(diagnostic);
+            *length = ArrayLength::Resolved(1);
+        }
+    }
+}
+
+fn positive_array_length(value: i64, span: Span) -> Result<usize, Diagnostic> {
+    if value <= 0 {
+        return Err(Diagnostic::new(
+            format!("array length must be positive, found {value}"),
+            span,
+        ));
+    }
+    if value > i64::from(i32::MAX) {
+        return Err(Diagnostic::new(
+            "array length exceeds the maximum i32 index range",
+            span,
+        ));
+    }
+    usize::try_from(value).map_err(|_| Diagnostic::new("array length is too large", span))
 }
 
 fn validate_compile_time_structure(
@@ -315,6 +515,16 @@ fn validate_compile_time_structure(
                     validate_compile_time_structure(argument, globals, description, diagnostics);
             }
         }
+        ExprKind::ArrayLiteral(elements) => {
+            for element in elements {
+                valid &=
+                    validate_compile_time_structure(element, globals, description, diagnostics);
+            }
+        }
+        ExprKind::Index { base, index } => {
+            valid &= validate_compile_time_structure(base, globals, description, diagnostics);
+            valid &= validate_compile_time_structure(index, globals, description, diagnostics);
+        }
         ExprKind::I32(_) | ExprKind::F32(_) | ExprKind::Bool(_) | ExprKind::Variable(_) => {}
     }
     valid
@@ -328,7 +538,7 @@ fn builtins() -> HashMap<String, Signature> {
                 builtin.name.to_owned(),
                 Signature {
                     params: builtin.params.to_vec(),
-                    return_type: builtin.return_type,
+                    return_type: builtin.return_type.clone(),
                 },
             )
         })
@@ -339,14 +549,33 @@ fn check_function(
     function: &Function,
     globals: &HashMap<String, ValueType>,
     constants: &HashMap<String, ValueType>,
+    constant_values: &HashMap<String, ConstantValue>,
     functions: &HashMap<String, Signature>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    for param in &function.params {
+        if matches!(param.ty, ValueType::Array { .. }) {
+            diagnostics.push(Diagnostic::new(
+                "arrays are not supported as function parameters yet",
+                param.span,
+            ));
+        }
+    }
+    if matches!(
+        function.return_type,
+        ReturnType::Value(ValueType::Array { .. })
+    ) {
+        diagnostics.push(Diagnostic::new(
+            "arrays are not supported as function return types yet",
+            function.span,
+        ));
+    }
     let mut checker = FunctionChecker::new(
         globals,
         constants,
+        constant_values,
         functions,
-        function.return_type,
+        function.return_type.clone(),
         diagnostics,
     );
     for param in &function.params {
@@ -363,7 +592,7 @@ fn check_function(
             .insert(
                 param.name.clone(),
                 Binding {
-                    ty: param.ty,
+                    ty: param.ty.clone(),
                     mutable: true,
                 },
             )
@@ -391,16 +620,25 @@ fn check_function(
 struct FunctionChecker<'a> {
     globals: &'a HashMap<String, ValueType>,
     constants: &'a HashMap<String, ValueType>,
+    constant_values: &'a HashMap<String, ConstantValue>,
     functions: &'a HashMap<String, Signature>,
     return_type: ReturnType,
     scopes: Vec<HashMap<String, Binding>>,
     diagnostics: &'a mut Vec<Diagnostic>,
 }
 
+#[derive(Clone)]
+struct Lvalue {
+    ty: ValueType,
+    mutable: bool,
+    root_name: String,
+}
+
 impl<'a> FunctionChecker<'a> {
     fn new(
         globals: &'a HashMap<String, ValueType>,
         constants: &'a HashMap<String, ValueType>,
+        constant_values: &'a HashMap<String, ConstantValue>,
         functions: &'a HashMap<String, Signature>,
         return_type: ReturnType,
         diagnostics: &'a mut Vec<Diagnostic>,
@@ -408,6 +646,7 @@ impl<'a> FunctionChecker<'a> {
         Self {
             globals,
             constants,
+            constant_values,
             functions,
             return_type,
             scopes: vec![HashMap::new()],
@@ -436,7 +675,7 @@ impl<'a> FunctionChecker<'a> {
                         statement.span,
                     );
                 }
-                if let Some(actual) = self.require_value(init, "variable initializer")
+                if let Some(actual) = self.require_value_as(init, ty, "variable initializer")
                     && actual != *ty
                 {
                     self.error(
@@ -456,7 +695,7 @@ impl<'a> FunctionChecker<'a> {
                     .insert(
                         name.clone(),
                         Binding {
-                            ty: *ty,
+                            ty: ty.clone(),
                             mutable: true,
                         },
                     )
@@ -468,47 +707,72 @@ impl<'a> FunctionChecker<'a> {
                     );
                 }
             }
-            StmtKind::Assign { name, op, value } => {
-                let binding = self.binding(name);
-                let actual = self.require_value(value, "assignment");
-                let Some(binding) = binding else {
-                    self.error(
-                        format!("cannot assign to unknown variable `{name}`"),
-                        statement.span,
-                    );
+            StmtKind::Assign { target, op, value } => {
+                let Some(lvalue) = self.infer_lvalue(target) else {
                     return;
                 };
-                if !binding.mutable {
-                    let message = if *op == AssignOp::Set {
-                        format!("cannot assign to constant `{name}`")
+                let actual = if *op == AssignOp::Set {
+                    self.require_value_as(value, &lvalue.ty, "assignment")
+                } else {
+                    self.require_value(value, "compound assignment")
+                };
+                if !lvalue.mutable {
+                    let direct_variable = matches!(target.kind, ExprKind::Variable(_));
+                    let message = if *op == AssignOp::Set && direct_variable {
+                        format!("cannot assign to constant `{}`", lvalue.root_name)
+                    } else if *op == AssignOp::Set {
+                        format!("cannot assign through constant `{}`", lvalue.root_name)
+                    } else if direct_variable {
+                        format!(
+                            "cannot use compound assignment on constant `{}`",
+                            lvalue.root_name
+                        )
                     } else {
-                        format!("cannot use compound assignment on constant `{name}`")
+                        format!(
+                            "cannot use compound assignment through constant `{}`",
+                            lvalue.root_name
+                        )
                     };
                     self.error(message, statement.span);
                     return;
                 }
-                if *op != AssignOp::Set && !binding.ty.is_numeric() {
+                if *op != AssignOp::Set && !lvalue.ty.is_numeric() {
                     self.error(
                         format!(
-                            "compound assignment requires a numeric target, but `{name}` is `{}`",
-                            binding.ty.name()
+                            "compound assignment requires a numeric target, but found `{}`",
+                            lvalue.ty.name()
                         ),
                         statement.span,
                     );
                 }
                 if let Some(actual) = actual
-                    && binding.ty != actual
+                    && lvalue.ty != actual
                 {
-                    let message = if *op == AssignOp::Set {
+                    let direct_variable = matches!(target.kind, ExprKind::Variable(_));
+                    let message = if *op == AssignOp::Set && direct_variable {
                         format!(
-                            "cannot assign `{}` to variable `{name}` of type `{}`",
+                            "cannot assign `{}` to variable `{}` of type `{}`",
                             actual.name(),
-                            binding.ty.name()
+                            lvalue.root_name,
+                            lvalue.ty.name()
+                        )
+                    } else if *op == AssignOp::Set {
+                        format!(
+                            "cannot assign `{}` to target of type `{}`",
+                            actual.name(),
+                            lvalue.ty.name()
+                        )
+                    } else if direct_variable {
+                        format!(
+                            "compound assignment to `{}` expects `{}`, but found `{}`",
+                            lvalue.root_name,
+                            lvalue.ty.name(),
+                            actual.name()
                         )
                     } else {
                         format!(
-                            "compound assignment to `{name}` expects `{}`, but found `{}`",
-                            binding.ty.name(),
+                            "compound assignment expects `{}`, but found `{}`",
+                            lvalue.ty.name(),
                             actual.name()
                         )
                     };
@@ -533,7 +797,7 @@ impl<'a> FunctionChecker<'a> {
                 self.require_bool(condition, "`while` condition");
                 self.check_nested_block(body);
             }
-            StmtKind::Return(value) => match (self.return_type, value) {
+            StmtKind::Return(value) => match (self.return_type.clone(), value) {
                 (ReturnType::Void, None) => {}
                 (ReturnType::Void, Some(value)) => {
                     self.infer_expr(value);
@@ -543,21 +807,28 @@ impl<'a> FunctionChecker<'a> {
                     format!("return requires a value of type `{}`", expected.name()),
                     statement.span,
                 ),
-                (ReturnType::Value(expected), Some(value)) => match self.infer_expr(value) {
-                    Some(ReturnType::Value(actual)) if actual != expected => self.error(
-                        format!(
-                            "return expects `{}`, but found `{}`",
-                            expected.name(),
-                            actual.name()
+                (ReturnType::Value(expected), Some(value)) => {
+                    match if matches!(value.kind, ExprKind::ArrayLiteral(_)) {
+                        self.require_value_as(value, &expected, "return")
+                            .map(ReturnType::Value)
+                    } else {
+                        self.infer_expr(value)
+                    } {
+                        Some(ReturnType::Value(actual)) if actual != expected => self.error(
+                            format!(
+                                "return expects `{}`, but found `{}`",
+                                expected.name(),
+                                actual.name()
+                            ),
+                            value.span,
                         ),
-                        value.span,
-                    ),
-                    Some(ReturnType::Void) => self.error(
-                        format!("return expects `{}`, but found `void`", expected.name()),
-                        value.span,
-                    ),
-                    _ => {}
-                },
+                        Some(ReturnType::Void) => self.error(
+                            format!("return expects `{}`, but found `void`", expected.name()),
+                            value.span,
+                        ),
+                        _ => {}
+                    }
+                }
             },
         }
     }
@@ -577,6 +848,13 @@ impl<'a> FunctionChecker<'a> {
                 Some(ValueType::F32.into())
             }
             ExprKind::Bool(_) => Some(ValueType::Bool.into()),
+            ExprKind::ArrayLiteral(_) => {
+                self.error(
+                    "array literal requires an explicit array type annotation",
+                    expression.span,
+                );
+                None
+            }
             ExprKind::Variable(name) => match self.binding(name) {
                 Some(binding) => Some(binding.ty.into()),
                 None => {
@@ -584,6 +862,9 @@ impl<'a> FunctionChecker<'a> {
                     None
                 }
             },
+            ExprKind::Index { base, index } => self
+                .infer_index(base, index, expression.span)
+                .map(ReturnType::Value),
             ExprKind::Unary { op, operand } => {
                 if *op == UnaryOp::Negate
                     && matches!(operand.kind, ExprKind::I32(value) if value == 2_147_483_648)
@@ -591,7 +872,7 @@ impl<'a> FunctionChecker<'a> {
                     return Some(ValueType::I32.into());
                 }
                 let ty = self.require_value(operand, "unary operator")?;
-                match (op, ty) {
+                match (op, ty.clone()) {
                     (UnaryOp::Negate, ValueType::I32 | ValueType::F32) => Some(ty.into()),
                     (UnaryOp::Not, ValueType::Bool) => Some(ValueType::Bool.into()),
                     (UnaryOp::Negate, _) => {
@@ -686,7 +967,7 @@ impl<'a> FunctionChecker<'a> {
                 for (index, arg) in args.iter().enumerate() {
                     let actual = self.require_value(arg, "function argument");
                     if let (Some(expected), Some(actual)) =
-                        (signature.params.get(index).copied(), actual)
+                        (signature.params.get(index).cloned(), actual)
                         && expected != actual
                     {
                         self.error(
@@ -719,10 +1000,14 @@ impl<'a> FunctionChecker<'a> {
                 }
                 match self.infer_expr(&args[0]) {
                     Some(ReturnType::Value(ValueType::I32 | ValueType::F32)) => {
-                        Some((*target).into())
+                        Some(target.clone().into())
                     }
                     Some(ReturnType::Value(ValueType::Bool)) => {
                         self.error("cannot convert `bool` to a numeric type", args[0].span);
+                        None
+                    }
+                    Some(ReturnType::Value(ValueType::Array { .. })) => {
+                        self.error("cannot convert an array to a numeric type", args[0].span);
                         None
                     }
                     Some(ReturnType::Void) => {
@@ -732,6 +1017,143 @@ impl<'a> FunctionChecker<'a> {
                     None => None,
                 }
             }
+        }
+    }
+
+    fn require_value_as(
+        &mut self,
+        expression: &Expr,
+        expected: &ValueType,
+        description: &str,
+    ) -> Option<ValueType> {
+        if let ExprKind::ArrayLiteral(elements) = &expression.kind {
+            let Some((element_type, length)) = expected.resolved_array() else {
+                self.error(
+                    format!(
+                        "{description} is an array literal, but the declared type is `{}`",
+                        expected.name()
+                    ),
+                    expression.span,
+                );
+                return None;
+            };
+            if elements.len() != length {
+                self.error(
+                    format!(
+                        "expected array length {length}, found {} elements",
+                        elements.len()
+                    ),
+                    expression.span,
+                );
+            }
+            for element in elements {
+                if let Some(actual) = self.require_value_as(element, element_type, "array element")
+                    && actual != *element_type
+                {
+                    self.error(
+                        format!(
+                            "array element expects `{}`, but found `{}`",
+                            element_type.name(),
+                            actual.name()
+                        ),
+                        element.span,
+                    );
+                }
+            }
+            return Some(expected.clone());
+        }
+        self.require_value(expression, description)
+    }
+
+    fn infer_index(&mut self, base: &Expr, index: &Expr, span: Span) -> Option<ValueType> {
+        let base_type = self.require_value(base, "indexed expression")?;
+        let index_type = self.require_value(index, "array index");
+        if let Some(index_type) = index_type
+            && index_type != ValueType::I32
+        {
+            self.error(
+                format!("array index must be i32, found `{}`", index_type.name()),
+                index.span,
+            );
+        }
+        let Some((element, length)) = base_type.resolved_array() else {
+            self.error(
+                format!("cannot index value of type `{}`", base_type.name()),
+                span,
+            );
+            return None;
+        };
+        self.check_constant_index(index, length);
+        Some(element.clone())
+    }
+
+    fn infer_lvalue(&mut self, expression: &Expr) -> Option<Lvalue> {
+        match &expression.kind {
+            ExprKind::Variable(name) => match self.binding(name) {
+                Some(binding) => Some(Lvalue {
+                    ty: binding.ty,
+                    mutable: binding.mutable,
+                    root_name: name.clone(),
+                }),
+                None => {
+                    self.error(
+                        format!("cannot assign to unknown variable `{name}`"),
+                        expression.span,
+                    );
+                    None
+                }
+            },
+            ExprKind::Index { base, index } => {
+                let root = self.infer_lvalue(base)?;
+                let index_type = self.require_value(index, "array index");
+                if let Some(index_type) = index_type
+                    && index_type != ValueType::I32
+                {
+                    self.error(
+                        format!("array index must be i32, found `{}`", index_type.name()),
+                        index.span,
+                    );
+                }
+                let Some((element, length)) = root.ty.resolved_array() else {
+                    self.error(
+                        format!("cannot index value of type `{}`", root.ty.name()),
+                        expression.span,
+                    );
+                    return None;
+                };
+                let element = element.clone();
+                self.check_constant_index(index, length);
+                Some(Lvalue {
+                    ty: element,
+                    mutable: root.mutable,
+                    root_name: root.root_name,
+                })
+            }
+            _ => {
+                self.infer_expr(expression);
+                self.error("invalid assignment target", expression.span);
+                None
+            }
+        }
+    }
+
+    fn check_constant_index(&mut self, index: &Expr, length: usize) {
+        let result = evaluate_expression(index, |name| {
+            self.constant_values.get(name).cloned().ok_or_else(|| {
+                Diagnostic::new(
+                    format!("`{name}` is not a compile-time constant"),
+                    index.span,
+                )
+            })
+        });
+        let Ok(ConstantValue::I32(value)) = result else {
+            return;
+        };
+        if value < 0 || usize::try_from(value).map_or(true, |value| value >= length) {
+            self.error(
+                format!("constant index {value} is out of bounds for length {length}"),
+                index.span,
+            );
         }
     }
 
@@ -764,17 +1186,17 @@ impl<'a> FunctionChecker<'a> {
         self.scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(name).copied())
+            .find_map(|scope| scope.get(name).cloned())
             .or_else(|| {
                 self.globals
                     .get(name)
-                    .copied()
+                    .cloned()
                     .map(|ty| Binding { ty, mutable: true })
             })
             .or_else(|| {
                 self.constants
                     .get(name)
-                    .copied()
+                    .cloned()
                     .map(|ty| Binding { ty, mutable: false })
             })
     }
@@ -820,14 +1242,14 @@ impl<'a> ConstantEvaluator<'a> {
             states: HashMap::new(),
             values: builtins::CONSTANTS
                 .iter()
-                .map(|constant| (constant.name.to_owned(), constant.value))
+                .map(|constant| (constant.name.to_owned(), constant.value.clone()))
                 .collect(),
             stack: Vec::new(),
         }
     }
 
     fn evaluate_named(&mut self, name: &str) -> Result<ConstantValue, Diagnostic> {
-        if let Some(value) = self.values.get(name).copied() {
+        if let Some(value) = self.values.get(name).cloned() {
             return Ok(value);
         }
         let Some(definition) = self.definitions.get(name).cloned() else {
@@ -864,7 +1286,9 @@ impl<'a> ConstantEvaluator<'a> {
 
         self.states.insert(name.to_owned(), VisitState::Visiting);
         self.stack.push(name.to_owned());
-        let result = self.evaluate_expr(&definition.init).and_then(|value| {
+        let result = self
+            .evaluate_typed_expr(&definition.init, &definition.ty)
+            .and_then(|value| {
             if value.ty() == definition.ty {
                 Ok(value)
             } else {
@@ -877,12 +1301,12 @@ impl<'a> ConstantEvaluator<'a> {
                     definition.init.span,
                 ))
             }
-        });
+            });
         self.stack.pop();
         match result {
             Ok(value) => {
                 self.states.insert(name.to_owned(), VisitState::Complete);
-                self.values.insert(name.to_owned(), value);
+                self.values.insert(name.to_owned(), value.clone());
                 Ok(value)
             }
             Err(error) => {
@@ -894,7 +1318,9 @@ impl<'a> ConstantEvaluator<'a> {
 
     fn evaluate_expr(&mut self, expression: &Expr) -> Result<ConstantValue, Diagnostic> {
         match &expression.kind {
-            ExprKind::Variable(name) if self.values.contains_key(name) => Ok(self.values[name]),
+            ExprKind::Variable(name) if self.values.contains_key(name) => {
+                Ok(self.values[name].clone())
+            }
             ExprKind::Variable(name) if self.definitions.contains_key(name) => {
                 self.evaluate_named(name)
             }
@@ -922,15 +1348,49 @@ impl<'a> ConstantEvaluator<'a> {
             }),
         }
     }
+
+    fn evaluate_typed_expr(
+        &mut self,
+        expression: &Expr,
+        expected: &ValueType,
+    ) -> Result<ConstantValue, Diagnostic> {
+        if let ExprKind::ArrayLiteral(elements) = &expression.kind {
+            let Some((element_type, length)) = expected.resolved_array() else {
+                return Err(Diagnostic::new(
+                    "array literal requires an array type annotation",
+                    expression.span,
+                ));
+            };
+            if elements.len() != length {
+                return Err(Diagnostic::new(
+                    format!(
+                        "expected array length {length}, found {} elements",
+                        elements.len()
+                    ),
+                    expression.span,
+                ));
+            }
+            let mut values = Vec::with_capacity(elements.len());
+            for element in elements {
+                values.push(self.evaluate_typed_expr(element, element_type)?);
+            }
+            return Ok(ConstantValue::Array {
+                element_type: Box::new(element_type.clone()),
+                elements: values,
+            });
+        }
+        self.evaluate_expr(expression)
+    }
 }
 
 fn evaluate_initializer(
     expression: &Expr,
+    expected: &ValueType,
     constants: &HashMap<String, ConstantValue>,
     globals: &HashMap<String, ValueType>,
 ) -> Result<ConstantValue, String> {
     let mut lookup = |name: &str| {
-        if let Some(value) = constants.get(name).copied() {
+        if let Some(value) = constants.get(name).cloned() {
             Ok(value)
         } else if globals.contains_key(name) {
             Err(Diagnostic::new(
@@ -944,7 +1404,55 @@ fn evaluate_initializer(
             ))
         }
     };
-    evaluate_expression(expression, &mut lookup).map_err(|diagnostic| diagnostic.message)
+    evaluate_typed_expression(expression, expected, &mut lookup)
+        .map_err(|diagnostic| diagnostic.message)
+}
+
+fn evaluate_typed_expression<F>(
+    expression: &Expr,
+    expected: &ValueType,
+    mut constant: F,
+) -> Result<ConstantValue, Diagnostic>
+where
+    F: FnMut(&str) -> Result<ConstantValue, Diagnostic>,
+{
+    fn evaluate<F>(
+        expression: &Expr,
+        expected: &ValueType,
+        constant: &mut F,
+    ) -> Result<ConstantValue, Diagnostic>
+    where
+        F: FnMut(&str) -> Result<ConstantValue, Diagnostic>,
+    {
+        if let ExprKind::ArrayLiteral(elements) = &expression.kind {
+            let Some((element_type, length)) = expected.resolved_array() else {
+                return Err(Diagnostic::new(
+                    "array literal requires an array type annotation",
+                    expression.span,
+                ));
+            };
+            if elements.len() != length {
+                return Err(Diagnostic::new(
+                    format!(
+                        "expected array length {length}, found {} elements",
+                        elements.len()
+                    ),
+                    expression.span,
+                ));
+            }
+            let mut values = Vec::with_capacity(elements.len());
+            for element in elements {
+                values.push(evaluate(element, element_type, constant)?);
+            }
+            return Ok(ConstantValue::Array {
+                element_type: Box::new(element_type.clone()),
+                elements: values,
+            });
+        }
+        evaluate_expression(expression, constant)
+    }
+
+    evaluate(expression, expected, &mut constant)
 }
 
 fn evaluate_expression<F>(expression: &Expr, mut constant: F) -> Result<ConstantValue, Diagnostic>
@@ -963,7 +1471,32 @@ where
             ExprKind::F32(value) if value.is_finite() => Ok(ConstantValue::F32(*value)),
             ExprKind::F32(_) => Err(invalid("floating-point constant must be finite".into())),
             ExprKind::Bool(value) => Ok(ConstantValue::Bool(*value)),
+            ExprKind::ArrayLiteral(_) => Err(invalid(
+                "array literal requires an explicit array type annotation".into(),
+            )),
             ExprKind::Variable(name) => constant(name),
+            ExprKind::Index { base, index } => {
+                let base = evaluate(base, constant)?;
+                let index = match evaluate(index, constant)? {
+                    ConstantValue::I32(value) => value,
+                    _ => return Err(invalid("array index must be i32".into())),
+                };
+                let ConstantValue::Array { elements, .. } = base else {
+                    return Err(invalid("only arrays can be indexed".into()));
+                };
+                let Ok(index) = usize::try_from(index) else {
+                    return Err(invalid(format!(
+                        "constant index {index} is out of bounds for length {}",
+                        elements.len()
+                    )));
+                };
+                elements.get(index).cloned().ok_or_else(|| {
+                    invalid(format!(
+                        "constant index {index} is out of bounds for length {}",
+                        elements.len()
+                    ))
+                })
+            }
             ExprKind::Call { name, .. } => Err(invalid(format!(
                 "constant expressions cannot call function `{name}`"
             ))),
@@ -976,7 +1509,7 @@ where
                     )));
                 }
                 let source = evaluate(&args[0], constant)?;
-                convert_constant(*target, source)
+                convert_constant(target.clone(), source)
                     .map_err(|message| Diagnostic::new(message, args[0].span))
             }
             ExprKind::Unary { op, operand } => {
@@ -1047,6 +1580,9 @@ fn convert_constant(target: ValueType, source: ConstantValue) -> Result<Constant
         }
         (_, ConstantValue::Bool(_)) => Err("cannot convert `bool` to a numeric type".into()),
         (ValueType::Bool, _) => Err("numeric conversions may only target `i32` or `f32`".into()),
+        (ValueType::Array { .. }, _) | (_, ConstantValue::Array { .. }) => {
+            Err("arrays cannot be converted to numeric types".into())
+        }
     }
 }
 

@@ -15,14 +15,17 @@ parameter     = identifier ":" value_type ;
 start         = "start" block ;
 update        = "update" "(" identifier ":" value_type ")" block ;
 draw          = "draw" block ;
-value_type    = "i32" | "f32" | "bool" ;
+value_type    = "i32" | "f32" | "bool"
+              | "[" value_type ";" array_length "]" ;
+array_length  = integer | identifier ;
 return_type   = value_type | "void" ;
 
 block         = "{" statement* "}" ;
 statement     = local | assignment | if | while | return | expression ";"? ;
 local         = "let" identifier ":" value_type "=" expression ";"? ;
-assignment    = identifier ("=" | "+=" | "-=" | "*=" | "/=")
+assignment    = assignable ("=" | "+=" | "-=" | "*=" | "/=")
                 expression ";"? ;
+assignable    = postfix ;
 if            = "if" expression block ("else" block)? ;
 while         = "while" expression block ;
 return        = "return" expression? ";"? ;
@@ -34,8 +37,10 @@ equality      = comparison (("==" | "!=") comparison)* ;
 comparison    = term (("<" | "<=" | ">" | ">=") term)* ;
 term          = factor (("+" | "-") factor)* ;
 factor        = unary (("*" | "/") unary)* ;
-unary         = ("-" | "!") unary | primary ;
+unary         = ("-" | "!") unary | postfix ;
+postfix       = primary ("[" expression "]")* ;
 primary       = integer | float | "true" | "false"
+              | "[" (expression ("," expression)* ","?)? "]"
               | identifier | identifier "(" arguments? ")"
               | ("i32" | "f32") "(" arguments? ")"
               | "(" expression ")" ;
@@ -49,8 +54,9 @@ conversion. The lexer uses longest-match rules for `+=`, `-=`, `*=`, `/=`,
 
 ## Types and functions
 
-Speck's value types are `i32`, `f32`, and `bool`. Variables, constants, and
-parameters always declare one of these types. There are no implicit
+Speck's scalar value types are `i32`, `f32`, and `bool`. Fixed arrays are also
+value types as described below. Variables, constants, and parameters always
+declare a type. There are no implicit
 conversions, so this is invalid:
 
 ```text
@@ -80,6 +86,49 @@ a sentinel result for effect-only work.
 Every game declares exactly one `start`, `update(dt: f32)`, and `draw` block.
 These lifecycle blocks are implicitly effect-only and do not use a return-type
 annotation. CRuMB calls them; Speck source does not declare `main`.
+
+## Fixed-size arrays and indexing
+
+An array type names its element type and fixed compile-time length:
+
+```text
+const VALUE_COUNT: i32 = 4
+let values: [i32; VALUE_COUNT] = [2, 4, 6, 8]
+let flags: [bool; 3] = [true, false, true]
+```
+
+The length must be a positive integer literal or an `i32` constant. Array
+declarations require an explicit type annotation; array literals are not
+generally inferred. A literal must contain exactly the declared number of
+elements, and every element must exactly match the element type. Nested fixed
+arrays follow from the type grammar and use repeated indexing such as
+`matrix[row][column]`; there is no separate multidimensional-array runtime.
+
+Arrays use ordinary value storage. Locals live in function storage, mutable
+globals use fixed LLVM globals, and immutable aggregate constants use
+read-only LLVM global storage. No array object, length header, heap allocation,
+or garbage collector is involved. Whole-array assignment between values of
+the same array type copies the complete value. Arrays are not yet accepted as
+function parameter or return types.
+
+Index expressions accept only `i32`:
+
+```text
+let selected: i32 = values[index]
+values[index] = 40
+values[index] += 2
+```
+
+A compile-time-known index outside `0..length` is rejected. Every runtime index
+is checked for both a negative value and a value at or above the length before
+LLVM emits an in-bounds element address. Failure calls the narrow
+`crumb_bounds_fail(index, length)` runtime function, prints
+`Speck array index N is out of bounds for length L` to standard error, and exits
+with failure. There is no exception or recoverable panic value. LLVM and Clang
+can fold away checks for constant valid indices.
+
+Writing through an indexed path requires a mutable root. A path rooted in an
+immutable `const` array is rejected. Reading an element produces a value.
 
 ## Explicit numeric conversions
 
@@ -128,7 +177,9 @@ Dependencies are evaluated after all constant names have been collected.
 Cycles are rejected with the participating names in dependency order.
 Short-circuiting also applies during constant evaluation, so an unreachable
 right operand is not evaluated. Constants are inlined into LLVM; they create no
-mutable storage and need no runtime initialization.
+mutable storage and need no runtime initialization. Scalar constants are
+inlined directly. Constant arrays use read-only aggregate storage so dynamic
+indexing still has a stable native address.
 
 Mutable top-level `let` initializers use the same compile-time expression rules
 and may reference constants, but not another mutable global. Locals remain
@@ -156,11 +207,11 @@ x += velocity * dt
 frames += 1
 ```
 
-The identifier must name a mutable local, parameter, or global. The target and
-right operand must have the same numeric type; no conversion is inserted. The
-right expression is evaluated once, and the result is stored back. Constants
-and Boolean values cannot be compound-assignment targets. Assignment remains a
-statement and does not produce a value.
+The target must be a mutable local, parameter, global, or indexed element path.
+The target and right operand must have the same numeric type; no conversion is
+inserted. The right expression is evaluated once, and the result is stored
+back. Constants and Boolean values cannot be compound-assignment targets.
+Assignment remains a statement and does not produce a value.
 
 Locals use lexical block scope and may shadow outer names. Parameters preserve
 Speck's existing mutable behavior.

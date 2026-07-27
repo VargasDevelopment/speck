@@ -24,6 +24,7 @@ int crumb_init(void);
 float crumb_frame_delta(void);
 void crumb_print_i32(int value);
 void crumb_debug_frame(int frame, float value);
+void crumb_bounds_fail(int index, int length);
 void crumb_clear_rgb(int red, int green, int blue);
 void crumb_fill_rect(int x, int y, int width, int height, int red, int green, int blue);
 bool crumb_key_down(int key);
