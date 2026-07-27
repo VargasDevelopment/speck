@@ -11,17 +11,30 @@
            image-rendering: crisp-edges; }
   #status[data-state="live"] { color: #8f8; }
   #status[data-state="stopped"], #status[data-state="disconnected"] { color: #f88; }
+  #input-status[data-state="connected"] { color: #8f8; }
+  #input-status[data-state="busy"], #input-status[data-state="disconnected"] { color: #f88; }
 </style>
 <canvas id="screen" width="320" height="180" aria-label="Speck framebuffer"></canvas>
 <div id="status" data-state="waiting">Waiting for the game…</div>
+<div id="input-status" data-state="waiting">Input: waiting for the game…</div>
 <script>
   const width = 320, height = 180, rgbBytes = width * height * 3;
   const canvas = document.querySelector('#screen');
   const status = document.querySelector('#status');
+  const inputStatus = document.querySelector('#input-status');
   const context = canvas.getContext('2d', { alpha: false });
   const image = context.createImageData(width, height);
   context.imageSmoothingEnabled = false;
   let sequence = 0;
+  const gameCodes = new Set([
+    'KeyW', 'KeyA', 'KeyS', 'KeyD',
+    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+    'Space', 'Enter', 'Escape'
+  ]);
+  const heldCodes = new Set();
+  const client = globalThis.crypto?.randomUUID?.() ??
+    `viewer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  let inputQueue = Promise.resolve();
 
   function setStatus(state, text) {
     status.dataset.state = state;
@@ -29,11 +42,73 @@
   }
 
   function resize() {
-    const ratio = Math.min((innerWidth - 24) / width, (innerHeight - 70) / height);
+    const ratio = Math.min((innerWidth - 24) / width, (innerHeight - 100) / height);
     const scale = ratio >= 1 ? Math.max(1, Math.floor(ratio)) : Math.max(0.1, ratio);
     canvas.style.width = `${width * scale}px`;
     canvas.style.height = `${height * scale}px`;
   }
+
+  function sendInput(kind, code = '-') {
+    inputQueue = inputQueue.then(async () => {
+      try {
+        const response = await fetch('/input', {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: `${client} ${kind} ${code}`,
+          cache: 'no-store',
+          keepalive: true
+        });
+        if (response.status === 204) {
+          inputStatus.dataset.state = 'connected';
+          inputStatus.textContent = 'Input: connected';
+        } else if (response.status === 409) {
+          inputStatus.dataset.state = 'busy';
+          inputStatus.textContent = 'Input: view only — another browser is controlling';
+        } else if (response.status === 503) {
+          inputStatus.dataset.state = 'waiting';
+          inputStatus.textContent = 'Input: waiting for the game…';
+        } else {
+          throw new Error(`HTTP ${response.status}`);
+        }
+      } catch (error) {
+        inputStatus.dataset.state = 'disconnected';
+        inputStatus.textContent = 'Input: disconnected';
+      }
+    });
+    return inputQueue;
+  }
+
+  function releaseAll() {
+    heldCodes.clear();
+    sendInput('release');
+  }
+
+  addEventListener('keydown', event => {
+    if (!gameCodes.has(event.code)) return;
+    event.preventDefault();
+    if (event.repeat || heldCodes.has(event.code)) return;
+    heldCodes.add(event.code);
+    sendInput('down', event.code);
+  });
+
+  addEventListener('keyup', event => {
+    if (!gameCodes.has(event.code)) return;
+    event.preventDefault();
+    heldCodes.delete(event.code);
+    sendInput('up', event.code);
+  });
+
+  addEventListener('blur', releaseAll);
+  addEventListener('pagehide', () => {
+    heldCodes.clear();
+    navigator.sendBeacon('/input', `${client} release -`);
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) releaseAll();
+  });
+  setInterval(() => {
+    if (!document.hidden && document.hasFocus()) sendInput('heartbeat');
+  }, 250);
 
   async function receiveFrames() {
     for (;;) {
@@ -71,6 +146,7 @@
 
   addEventListener('resize', resize);
   resize();
+  sendInput('heartbeat');
   receiveFrames();
 </script>
 </html>

@@ -20,3 +20,9 @@ pleasant without weakening the floppy-sized native-game constraint.
   evaluated by the compiler and inlined without storage or initialization code.
 - Preserve CRuMB as a narrow portable boundary. Language ergonomics must not
   couple Speck semantics to a presenter, window system, or host platform.
+- Expose stable game meaning, not host events. Speck asks whether a named
+  digital key is down, pressed, or released; Cocoa and the browser translate
+  their own codes below the CRuMB boundary.
+- Keep mechanics in the program. Input state is infrastructure, while movement,
+  jumping, collision, Pong rules, and BOOTS behavior remain user-authored Speck
+  until real programs demonstrate a reusable need.

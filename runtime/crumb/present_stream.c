@@ -9,17 +9,38 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 enum {
     CRUMB_FRAME_HEADER_BYTES = 24,
     CRUMB_FRAME_PROTOCOL_VERSION = 1,
-    CRUMB_PIXEL_FORMAT_RGB8 = 1
+    CRUMB_PIXEL_FORMAT_RGB8 = 1,
+    CRUMB_INPUT_MESSAGE_BYTES = 8,
+    CRUMB_INPUT_PROTOCOL_VERSION = 1,
+    CRUMB_INPUT_KEY = 1,
+    CRUMB_INPUT_RELEASE_ALL = 2
 };
 
 static int stream_socket = -1;
 static uint64_t frame_sequence = 0;
+static unsigned char input_message[CRUMB_INPUT_MESSAGE_BYTES];
+static size_t input_message_bytes = 0;
+
+static void apply_input_message(void) {
+    if (memcmp(input_message, "SPKI", 4) != 0 || input_message[4] != CRUMB_INPUT_PROTOCOL_VERSION) {
+        return;
+    }
+    if (input_message[5] == CRUMB_INPUT_KEY && input_message[6] < CRUMB_KEY_COUNT &&
+        input_message[7] <= 1) {
+        crumb_input_set_key(input_message[6], input_message[7]);
+    } else if (input_message[5] == CRUMB_INPUT_RELEASE_ALL && input_message[6] == 0 &&
+               input_message[7] == 0) {
+        crumb_input_release_all();
+    }
+}
 
 static void write_u16(unsigned char *target, uint16_t value) {
     target[0] = (unsigned char)(value >> 8);
@@ -102,7 +123,54 @@ int crumb_present_init(void) {
         return 1;
     }
     frame_sequence = 0;
+    input_message_bytes = 0;
     return CRUMB_PRESENT_CONTINUE;
+}
+
+int crumb_present_poll(void) {
+    if (stream_socket < 0) {
+        return CRUMB_PRESENT_ERROR;
+    }
+    for (;;) {
+        fd_set readable;
+        struct timeval timeout = {0};
+        ssize_t received;
+        int ready;
+
+        FD_ZERO(&readable);
+        FD_SET(stream_socket, &readable);
+        ready = select(stream_socket + 1, &readable, NULL, NULL, &timeout);
+        if (ready == 0) {
+            return CRUMB_PRESENT_CONTINUE;
+        }
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            crumb_input_release_all();
+            return CRUMB_PRESENT_ERROR;
+        }
+        received = recv(stream_socket, input_message + input_message_bytes,
+                        CRUMB_INPUT_MESSAGE_BYTES - input_message_bytes, 0);
+
+        if (received > 0) {
+            input_message_bytes += (size_t)received;
+            if (input_message_bytes == CRUMB_INPUT_MESSAGE_BYTES) {
+                apply_input_message();
+                input_message_bytes = 0;
+            }
+            continue;
+        }
+        if (received == 0) {
+            crumb_input_release_all();
+            return CRUMB_PRESENT_STOP;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        crumb_input_release_all();
+        return CRUMB_PRESENT_ERROR;
+    }
 }
 
 int crumb_present(void) {
@@ -128,6 +196,8 @@ int crumb_present(void) {
 }
 
 void crumb_present_shutdown(void) {
+    crumb_input_release_all();
+    input_message_bytes = 0;
     if (stream_socket >= 0) {
         close(stream_socket);
         stream_socket = -1;

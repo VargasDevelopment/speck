@@ -321,12 +321,13 @@ fn parse_dev_args(args: &[OsString]) -> Result<(PathBuf, dev::Options), String> 
                 let value = args
                     .get(cursor)
                     .ok_or_else(|| "`--frames` requires a positive integer".to_owned())?;
-                options.frame_limit = value.to_string_lossy().parse::<u32>().map_err(|_| {
+                let frame_limit = value.to_string_lossy().parse::<u32>().map_err(|_| {
                     format!("invalid `--frames` value `{}`", value.to_string_lossy())
                 })?;
-                if options.frame_limit == 0 {
+                if frame_limit == 0 {
                     return Err("`--frames` must be greater than zero".into());
                 }
+                options.frame_limit = Some(frame_limit);
             }
             value if value.starts_with('-') => {
                 return Err(format!("unknown development option `{value}`"));
@@ -442,5 +443,21 @@ mod tests {
         let missing = parse_native_args(&[OsString::from("game.spk"), OsString::from("--frames")])
             .expect_err("a missing count should fail");
         assert!(missing.contains("requires a positive integer"));
+    }
+
+    #[test]
+    fn development_run_is_unbounded_by_default_and_accepts_a_finite_override() {
+        let (source, options) = parse_dev_args(&[OsString::from("game.spk")])
+            .expect("default development arguments should parse");
+        assert_eq!(source, PathBuf::from("game.spk"));
+        assert_eq!(options.frame_limit, None);
+
+        let (_, options) = parse_dev_args(&[
+            OsString::from("game.spk"),
+            OsString::from("--frames"),
+            OsString::from("3"),
+        ])
+        .expect("finite development arguments should parse");
+        assert_eq!(options.frame_limit, Some(3));
     }
 }

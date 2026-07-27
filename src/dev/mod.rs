@@ -7,7 +7,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::toolchain::{self, BuildEnvironment};
 
@@ -16,7 +16,7 @@ pub struct Options {
     pub bind: IpAddr,
     pub port: u16,
     pub port_explicit: bool,
-    pub frame_limit: u32,
+    pub frame_limit: Option<u32>,
 }
 
 impl Default for Options {
@@ -25,7 +25,7 @@ impl Default for Options {
             bind: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: 8787,
             port_explicit: false,
-            frame_limit: 1800,
+            frame_limit: None,
         }
     }
 }
@@ -45,17 +45,25 @@ pub fn run(
         .port();
 
     let frames = server::FrameStore::default();
+    let controls = server::InputControl::default();
     let shutdown = Arc::new(AtomicBool::new(false));
     let interrupted = Arc::new(AtomicBool::new(false));
     let (fatal_tx, fatal_rx) = mpsc::channel();
     let http_thread = server::spawn_http_server(
         http.listener,
         frames.clone(),
+        controls.clone(),
         shutdown.clone(),
         fatal_tx.clone(),
     );
-    let frame_thread =
-        server::spawn_frame_receiver(frame_listener, frames.clone(), shutdown.clone(), fatal_tx);
+    let frame_thread = server::spawn_frame_receiver(
+        frame_listener,
+        frames.clone(),
+        controls.clone(),
+        shutdown.clone(),
+        fatal_tx,
+    );
+    let input_thread = server::spawn_input_watchdog(controls, shutdown.clone());
 
     let interrupt_shutdown = shutdown.clone();
     let interrupt_flag = interrupted.clone();
@@ -67,15 +75,20 @@ pub fn run(
         frames.stop();
         let _ = http_thread.join();
         let _ = frame_thread.join();
+        let _ = input_thread.join();
         return Err(format!("could not install Ctrl-C handler: {error}"));
     }
 
-    let child = Command::new(&artifacts.executable)
+    let mut command = Command::new(&artifacts.executable);
+    command
         .env("SPECK_FRAME_STREAM_PORT", frame_port.to_string())
-        .env("SPECK_FRAME_LIMIT", options.frame_limit.to_string())
+        .env_remove("SPECK_FRAME_LIMIT")
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn();
+        .stderr(Stdio::inherit());
+    if let Some(limit) = options.frame_limit {
+        command.env("SPECK_FRAME_LIMIT", limit.to_string());
+    }
+    let child = command.spawn();
     let mut child = match child {
         Ok(child) => child,
         Err(error) => {
@@ -83,6 +96,7 @@ pub fn run(
             frames.stop();
             let _ = http_thread.join();
             let _ = frame_thread.join();
+            let _ = input_thread.join();
             return Err(format!(
                 "could not launch development game `{}`: {error}",
                 artifacts.executable.display()
@@ -104,7 +118,10 @@ pub fn run(
         );
     }
     println!("Development game: {}", artifacts.executable.display());
-    println!("Frame limit: {}", options.frame_limit);
+    match options.frame_limit {
+        Some(limit) => println!("Frame limit: {limit}"),
+        None => println!("Frame limit: unbounded (use Speck `quit()` or press Ctrl-C to stop)"),
+    }
     println!("Viewer URL: {}", viewer_url(http.address));
     if options.bind.is_loopback() {
         println!(
@@ -115,23 +132,37 @@ pub fn run(
     }
 
     let mut fatal_error = None;
+    let mut interrupt_deadline = None;
+    let mut interrupt_error = None;
     let status = loop {
         if let Ok(error) = fatal_rx.try_recv() {
             fatal_error = Some(error);
             shutdown.store(true, Ordering::Release);
         }
-        if shutdown.load(Ordering::Acquire) {
+        if interrupted.load(Ordering::Acquire) && interrupt_deadline.is_none() {
+            match interrupt_child(&child) {
+                Ok(()) => interrupt_deadline = Some(Instant::now() + Duration::from_secs(2)),
+                Err(error) => {
+                    interrupt_error = Some(error);
+                    terminate(&mut child);
+                }
+            }
+        } else if shutdown.load(Ordering::Acquire) && !interrupted.load(Ordering::Acquire) {
             terminate(&mut child);
-            break child
-                .wait()
-                .map_err(|error| format!("could not wait for development game: {error}"))?;
         }
         match child
             .try_wait()
             .map_err(|error| format!("could not inspect development game: {error}"))?
         {
             Some(status) => break status,
-            None => thread::sleep(Duration::from_millis(20)),
+            None => {
+                if interrupt_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                    terminate(&mut child);
+                    interrupt_error =
+                        Some("development game did not stop within two seconds of Ctrl-C".into());
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
         }
     };
 
@@ -143,11 +174,18 @@ pub fn run(
     frame_thread
         .join()
         .map_err(|_| "frame receiver thread panicked".to_owned())?;
+    input_thread
+        .join()
+        .map_err(|_| "input watchdog thread panicked".to_owned())?;
 
     let frames_received = frames.latest_sequence().unwrap_or(0);
 
     if interrupted.load(Ordering::Acquire) {
-        return Err("development run interrupted by Ctrl-C".into());
+        if let Some(error) = interrupt_error {
+            return Err(error);
+        }
+        println!("Development game stopped cleanly after Ctrl-C.");
+        return Ok(());
     }
     if let Some(error) = fatal_error.or_else(|| fatal_rx.try_recv().ok()) {
         return Err(error);
@@ -155,10 +193,11 @@ pub fn run(
     if !status.success() {
         return Err(format!("development game exited with {status}"));
     }
-    if frames_received != u64::from(options.frame_limit) {
+    if let Some(limit) = options.frame_limit
+        && frames_received != u64::from(limit)
+    {
         return Err(format!(
-            "development game completed, but the server received {frames_received} of {} frames",
-            options.frame_limit
+            "development game completed, but the server received {frames_received} of {limit} frames"
         ));
     }
     println!("Frames received: {frames_received}");
@@ -169,6 +208,29 @@ pub fn run(
 fn terminate(child: &mut Child) {
     if matches!(child.try_wait(), Ok(None)) {
         let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+fn interrupt_child(child: &Child) -> Result<(), String> {
+    type CInt = std::ffi::c_int;
+    const SIGINT: CInt = 2;
+
+    unsafe extern "C" {
+        fn kill(process: CInt, signal: CInt) -> CInt;
+    }
+
+    let process = CInt::try_from(child.id())
+        .map_err(|_| "development game process identifier does not fit the host ABI".to_owned())?;
+    // SAFETY: the PID belongs to the live child returned by `Command`, and SIGINT is accepted by
+    // POSIX `kill` on both supported Speck hosts.
+    if unsafe { kill(process, SIGINT) } == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "could not forward Ctrl-C to development game: {}",
+            std::io::Error::last_os_error()
+        ))
     }
 }
 
@@ -187,12 +249,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn development_defaults_are_loopback_only_and_finite() {
+    fn development_defaults_are_loopback_only_and_unbounded() {
         let options = Options::default();
         assert_eq!(options.bind, IpAddr::V4(Ipv4Addr::LOCALHOST));
         assert_eq!(options.port, 8787);
         assert!(!options.port_explicit);
-        assert_eq!(options.frame_limit, 1800);
+        assert_eq!(options.frame_limit, None);
     }
 
     #[test]

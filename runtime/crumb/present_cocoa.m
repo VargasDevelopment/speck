@@ -11,10 +11,81 @@ static NSView *crumb_view = nil;
 static NSObject<NSWindowDelegate> *crumb_window_delegate = nil;
 static int crumb_window_closed = 0;
 
+enum crumb_macos_key_code {
+    CRUMB_MAC_KEY_A = 0,
+    CRUMB_MAC_KEY_S = 1,
+    CRUMB_MAC_KEY_D = 2,
+    CRUMB_MAC_KEY_W = 13,
+    CRUMB_MAC_KEY_ENTER = 36,
+    CRUMB_MAC_KEY_SPACE = 49,
+    CRUMB_MAC_KEY_ESCAPE = 53,
+    CRUMB_MAC_KEY_KEYPAD_ENTER = 76,
+    CRUMB_MAC_KEY_LEFT = 123,
+    CRUMB_MAC_KEY_RIGHT = 124,
+    CRUMB_MAC_KEY_DOWN = 125,
+    CRUMB_MAC_KEY_UP = 126
+};
+
+static int crumb_key_for_macos_code(unsigned short key_code) {
+    switch (key_code) {
+    case CRUMB_MAC_KEY_W:
+        return CRUMB_KEY_W;
+    case CRUMB_MAC_KEY_A:
+        return CRUMB_KEY_A;
+    case CRUMB_MAC_KEY_S:
+        return CRUMB_KEY_S;
+    case CRUMB_MAC_KEY_D:
+        return CRUMB_KEY_D;
+    case CRUMB_MAC_KEY_UP:
+        return CRUMB_KEY_UP;
+    case CRUMB_MAC_KEY_DOWN:
+        return CRUMB_KEY_DOWN;
+    case CRUMB_MAC_KEY_LEFT:
+        return CRUMB_KEY_LEFT;
+    case CRUMB_MAC_KEY_RIGHT:
+        return CRUMB_KEY_RIGHT;
+    case CRUMB_MAC_KEY_SPACE:
+        return CRUMB_KEY_SPACE;
+    case CRUMB_MAC_KEY_ENTER:
+    case CRUMB_MAC_KEY_KEYPAD_ENTER:
+        return CRUMB_KEY_ENTER;
+    case CRUMB_MAC_KEY_ESCAPE:
+        return CRUMB_KEY_ESCAPE;
+    default:
+        return -1;
+    }
+}
+
 @interface CrumbFramebufferView : NSView
 @end
 
 @implementation CrumbFramebufferView
+
+- (BOOL)acceptsFirstResponder {
+    return YES;
+}
+
+- (void)keyDown:(NSEvent *)event {
+    const int key = crumb_key_for_macos_code([event keyCode]);
+
+    if (key >= 0) {
+        if (![event isARepeat]) {
+            crumb_input_set_key(key, 1);
+        }
+        return;
+    }
+    [super keyDown:event];
+}
+
+- (void)keyUp:(NSEvent *)event {
+    const int key = crumb_key_for_macos_code([event keyCode]);
+
+    if (key >= 0) {
+        crumb_input_set_key(key, 0);
+        return;
+    }
+    [super keyUp:event];
+}
 
 - (BOOL)isOpaque {
     return YES;
@@ -83,7 +154,13 @@ static int crumb_window_closed = 0;
 
 - (void)windowWillClose:(NSNotification *)notification {
     (void)notification;
+    crumb_input_release_all();
     crumb_window_closed = 1;
+}
+
+- (void)windowDidResignKey:(NSNotification *)notification {
+    (void)notification;
+    crumb_input_release_all();
 }
 
 @end
@@ -119,13 +196,14 @@ int crumb_present_init(void) {
         [crumb_window setTitle:@"Speck"];
         [crumb_window center];
         [crumb_window makeKeyAndOrderFront:nil];
+        [crumb_window makeFirstResponder:crumb_view];
         [NSApp activate];
         crumb_window_closed = 0;
     }
     return CRUMB_PRESENT_CONTINUE;
 }
 
-int crumb_present(void) {
+int crumb_present_poll(void) {
     @autoreleasepool {
         NSEvent *event;
 
@@ -139,6 +217,12 @@ int crumb_present(void) {
         if (crumb_window_closed) {
             return CRUMB_PRESENT_STOP;
         }
+    }
+    return CRUMB_PRESENT_CONTINUE;
+}
+
+int crumb_present(void) {
+    @autoreleasepool {
         [crumb_view setNeedsDisplay:YES];
         [crumb_view displayIfNeeded];
     }
@@ -147,6 +231,7 @@ int crumb_present(void) {
 
 void crumb_present_shutdown(void) {
     @autoreleasepool {
+        crumb_input_release_all();
         if (crumb_window != nil) {
             [crumb_window setDelegate:nil];
             [crumb_window orderOut:nil];

@@ -7,10 +7,103 @@ pub const FRAME_CHANNELS: usize = 3;
 pub const FRAME_PAYLOAD_BYTES: usize =
     FRAME_WIDTH as usize * FRAME_HEIGHT as usize * FRAME_CHANNELS;
 pub const FRAME_HEADER_BYTES: usize = 24;
+pub const CONTROL_MESSAGE_BYTES: usize = 8;
+pub const BROWSER_INPUT_MAX_BYTES: usize = 128;
 
 const MAGIC: &[u8; 4] = b"SPKF";
 const VERSION: u8 = 1;
 const PIXEL_FORMAT_RGB8: u8 = 1;
+const CONTROL_MAGIC: &[u8; 4] = b"SPKI";
+const CONTROL_VERSION: u8 = 1;
+const CONTROL_KEY: u8 = 1;
+const CONTROL_RELEASE_ALL: u8 = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum Key {
+    W = 0,
+    A = 1,
+    S = 2,
+    D = 3,
+    Up = 4,
+    Down = 5,
+    Left = 6,
+    Right = 7,
+    Space = 8,
+    Enter = 9,
+    Escape = 10,
+}
+
+impl Key {
+    fn from_id(id: u8) -> Option<Self> {
+        Some(match id {
+            0 => Self::W,
+            1 => Self::A,
+            2 => Self::S,
+            3 => Self::D,
+            4 => Self::Up,
+            5 => Self::Down,
+            6 => Self::Left,
+            7 => Self::Right,
+            8 => Self::Space,
+            9 => Self::Enter,
+            10 => Self::Escape,
+            _ => return None,
+        })
+    }
+
+    fn from_browser_code(code: &str) -> Option<Self> {
+        Some(match code {
+            "KeyW" => Self::W,
+            "KeyA" => Self::A,
+            "KeyS" => Self::S,
+            "KeyD" => Self::D,
+            "ArrowUp" => Self::Up,
+            "ArrowDown" => Self::Down,
+            "ArrowLeft" => Self::Left,
+            "ArrowRight" => Self::Right,
+            "Space" => Self::Space,
+            "Enter" => Self::Enter,
+            "Escape" => Self::Escape,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ControlMessage {
+    Key { key: Key, down: bool },
+    ReleaseAll,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BrowserInput {
+    Key {
+        client: String,
+        key: Key,
+        down: bool,
+    },
+    ReleaseAll {
+        client: String,
+    },
+    Heartbeat {
+        client: String,
+    },
+    UnsupportedKey {
+        client: String,
+    },
+}
+
+impl BrowserInput {
+    pub fn client(&self) -> &str {
+        match self {
+            Self::Key { client, .. }
+            | Self::ReleaseAll { client }
+            | Self::Heartbeat { client }
+            | Self::UnsupportedKey { client } => client,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Frame {
@@ -54,6 +147,105 @@ pub fn encode_frame(sequence: u64, pixels: &[u8]) -> Result<Vec<u8>, ProtocolErr
     encoded.extend_from_slice(&sequence.to_be_bytes());
     encoded.extend_from_slice(pixels);
     Ok(encoded)
+}
+
+pub fn encode_control(message: ControlMessage) -> [u8; CONTROL_MESSAGE_BYTES] {
+    let mut encoded = [0_u8; CONTROL_MESSAGE_BYTES];
+    encoded[..4].copy_from_slice(CONTROL_MAGIC);
+    encoded[4] = CONTROL_VERSION;
+    match message {
+        ControlMessage::Key { key, down } => {
+            encoded[5] = CONTROL_KEY;
+            encoded[6] = key as u8;
+            encoded[7] = u8::from(down);
+        }
+        ControlMessage::ReleaseAll => encoded[5] = CONTROL_RELEASE_ALL,
+    }
+    encoded
+}
+
+pub fn decode_control(bytes: &[u8]) -> Result<ControlMessage, ProtocolError> {
+    if bytes.len() != CONTROL_MESSAGE_BYTES {
+        return Err(ProtocolError::new(format!(
+            "input control message must contain {CONTROL_MESSAGE_BYTES} bytes, found {}",
+            bytes.len()
+        )));
+    }
+    if &bytes[..4] != CONTROL_MAGIC {
+        return Err(ProtocolError::new(
+            "invalid input control magic; expected `SPKI`",
+        ));
+    }
+    if bytes[4] != CONTROL_VERSION {
+        return Err(ProtocolError::new(format!(
+            "unsupported input protocol version {}; expected {CONTROL_VERSION}",
+            bytes[4]
+        )));
+    }
+    match bytes[5] {
+        CONTROL_KEY if bytes[7] <= 1 => {
+            let key = Key::from_id(bytes[6])
+                .ok_or_else(|| ProtocolError::new("unsupported input key identifier"))?;
+            Ok(ControlMessage::Key {
+                key,
+                down: bytes[7] != 0,
+            })
+        }
+        CONTROL_RELEASE_ALL if bytes[6] == 0 && bytes[7] == 0 => Ok(ControlMessage::ReleaseAll),
+        CONTROL_KEY => Err(ProtocolError::new("invalid key transition state")),
+        CONTROL_RELEASE_ALL => Err(ProtocolError::new("invalid release-all payload")),
+        kind => Err(ProtocolError::new(format!(
+            "unsupported input control message kind {kind}"
+        ))),
+    }
+}
+
+pub fn parse_browser_input(body: &[u8]) -> Result<BrowserInput, ProtocolError> {
+    if body.len() > BROWSER_INPUT_MAX_BYTES {
+        return Err(ProtocolError::new(format!(
+            "browser input message exceeded {BROWSER_INPUT_MAX_BYTES} bytes"
+        )));
+    }
+    let text = std::str::from_utf8(body)
+        .map_err(|_| ProtocolError::new("browser input message was not UTF-8"))?;
+    let fields = text.split_ascii_whitespace().collect::<Vec<_>>();
+    if fields.len() != 3 {
+        return Err(ProtocolError::new(
+            "browser input message must contain `client kind code`",
+        ));
+    }
+    let client = fields[0];
+    if client.is_empty()
+        || client.len() > 64
+        || !client
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(ProtocolError::new(
+            "invalid browser input client identifier",
+        ));
+    }
+    let client = client.to_owned();
+    match fields[1] {
+        "down" | "up" => {
+            let Some(key) = Key::from_browser_code(fields[2]) else {
+                return Ok(BrowserInput::UnsupportedKey { client });
+            };
+            Ok(BrowserInput::Key {
+                client,
+                key,
+                down: fields[1] == "down",
+            })
+        }
+        "release" if fields[2] == "-" => Ok(BrowserInput::ReleaseAll { client }),
+        "heartbeat" if fields[2] == "-" => Ok(BrowserInput::Heartbeat { client }),
+        "release" | "heartbeat" => Err(ProtocolError::new(
+            "release and heartbeat messages must use `-` as their code",
+        )),
+        kind => Err(ProtocolError::new(format!(
+            "unsupported browser input message kind `{kind}`"
+        ))),
+    }
 }
 
 pub fn read_frame(reader: &mut impl Read) -> Result<Option<Frame>, ProtocolError> {
@@ -206,5 +398,71 @@ mod tests {
             read_frame(&mut Cursor::new(Vec::<u8>::new())).expect("EOF should be clean"),
             None
         );
+    }
+
+    #[test]
+    fn round_trips_fixed_input_control_messages() {
+        for message in [
+            ControlMessage::Key {
+                key: Key::A,
+                down: true,
+            },
+            ControlMessage::Key {
+                key: Key::Escape,
+                down: false,
+            },
+            ControlMessage::ReleaseAll,
+        ] {
+            let encoded = encode_control(message);
+            assert_eq!(encoded.len(), CONTROL_MESSAGE_BYTES);
+            assert_eq!(
+                decode_control(&encoded).expect("message should decode"),
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_truncated_and_oversized_input_messages() {
+        assert!(decode_control(b"SPKI").is_err());
+        let mut invalid = encode_control(ControlMessage::ReleaseAll);
+        invalid[0] = b'X';
+        assert!(decode_control(&invalid).is_err());
+        invalid = encode_control(ControlMessage::ReleaseAll);
+        invalid[5] = 99;
+        assert!(decode_control(&invalid).is_err());
+        assert!(parse_browser_input(&[b'x'; BROWSER_INPUT_MAX_BYTES + 1]).is_err());
+        assert!(parse_browser_input(b"missing-fields").is_err());
+        assert!(parse_browser_input(b"client down \xFF").is_err());
+    }
+
+    #[test]
+    fn parses_supported_browser_input_and_ignores_unsupported_keys() {
+        assert_eq!(
+            parse_browser_input(b"viewer-1 down ArrowLeft").expect("input should parse"),
+            BrowserInput::Key {
+                client: "viewer-1".into(),
+                key: Key::Left,
+                down: true,
+            }
+        );
+        assert_eq!(
+            parse_browser_input(b"viewer-1 up Space").expect("input should parse"),
+            BrowserInput::Key {
+                client: "viewer-1".into(),
+                key: Key::Space,
+                down: false,
+            }
+        );
+        assert_eq!(
+            parse_browser_input(b"viewer-1 release -").expect("input should parse"),
+            BrowserInput::ReleaseAll {
+                client: "viewer-1".into(),
+            }
+        );
+        assert!(matches!(
+            parse_browser_input(b"viewer-1 down KeyQ").expect("unsupported key should be safe"),
+            BrowserInput::UnsupportedKey { .. }
+        ));
     }
 }

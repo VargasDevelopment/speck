@@ -1,0 +1,46 @@
+game "Keyboard Rectangle"
+
+const SCREEN_WIDTH: i32 = 320
+const BOX_SIZE: i32 = 20
+const SPEED: f32 = 120.0
+
+let x: f32 = 150.0
+let alternate_color: bool = false
+
+start {}
+
+update(dt: f32) {
+    if key_down(KEY_LEFT) || key_down(KEY_A) {
+        x -= SPEED * dt
+    }
+
+    if key_down(KEY_RIGHT) || key_down(KEY_D) {
+        x += SPEED * dt
+    }
+
+    if x < 0.0 {
+        x = 0.0
+    }
+
+    if x > f32(SCREEN_WIDTH - BOX_SIZE) {
+        x = f32(SCREEN_WIDTH - BOX_SIZE)
+    }
+
+    if key_pressed(KEY_SPACE) {
+        alternate_color = !alternate_color
+    }
+
+    if key_pressed(KEY_ESCAPE) {
+        quit()
+    }
+}
+
+draw {
+    clear_rgb(32, 18, 32)
+
+    if alternate_color {
+        fill_rect(i32(x), 80, BOX_SIZE, BOX_SIZE, 80, 160, 240)
+    } else {
+        fill_rect(i32(x), 80, BOX_SIZE, BOX_SIZE, 240, 150, 40)
+    }
+}

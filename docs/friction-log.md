@@ -29,3 +29,16 @@ feature as an automatic requirement.
 
 These editor and naming questions remain open; this slice does not silently
 discard them or treat them as language requirements prematurely.
+
+## Input-slice observations
+
+- A fixed set of readable `KEY_*` names plus `key_down`, `key_pressed`, and
+  `key_released` was enough to express the infrastructure rectangle without an
+  enum feature, input syntax, or presenter concepts.
+- Browser long polling has no durable controller connection, so focus messages
+  alone cannot guarantee release after a vanished tab or tunnel. A small
+  controller heartbeat lease solved that host-lifecycle problem without
+  changing Speck or creating a generalized event system.
+- Movement helpers, action mapping, rebinding, arbitrary key enumeration, and
+  physics remain unevaluated. The next manually written controllable rectangle
+  and BOOTS sketch should determine whether any of them represent real friction.

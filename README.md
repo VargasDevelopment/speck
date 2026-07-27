@@ -10,12 +10,14 @@ to native object code, and linked with CRuMB.
 **CRuMB — Compact Runtime for ultra-Minimal Binaries.**
 
 CRuMB is Speck's narrow C ABI platform layer. It owns startup, the frame loop,
-the frame delta, a fixed 320x180 RGB software framebuffer, debug output, and
-shutdown. Its normal headless build runs five deterministic frames and writes a
-PPM. A development-only presenter can instead stream complete frames to the
+the frame delta, a fixed 320x180 RGB software framebuffer, portable digital-key
+state, debug output, and shutdown. Its normal headless build runs five
+deterministic input-free frames and writes a PPM. A development-only presenter
+can instead stream complete frames and receive keyboard transitions through the
 Speck compiler's small browser server. On macOS ARM64, a native Cocoa presenter
-displays the same framebuffer in a resizable window. CRuMB remains independent
-of SDL, Raylib, GLFW, and other game frameworks.
+displays the same framebuffer and translates keyboard events in a resizable
+window. CRuMB remains independent of SDL, Raylib, GLFW, and other game
+frameworks.
 
 LLVM and the Speck compiler are development-time tools. They are not intended
 to ship with a compiled game; the build output is a native executable linked
@@ -40,14 +42,20 @@ cargo run -- build examples/delta_rectangle.spk
 cargo run -- build examples/framebuffer_rect.spk
 ./build/framebuffer_rect
 
-# Development-only live viewer (stops after 1,800 frames by default)
+# Development-only live viewer (unbounded; `quit()` or Ctrl-C stops it)
 cargo run -- dev examples/moving_rectangle.spk
+
+# Presenter-independent keyboard smoke test in the browser viewer
+cargo run -- dev examples/keyboard_rectangle.spk --port 0
 
 # Native macOS window (runs until the window closes or Ctrl-C)
 cargo run -- run examples/moving_rectangle.spk
 
 # The language-ergonomics sketch in the same native presenter
 cargo run -- run examples/delta_rectangle.spk
+
+# Keyboard input through the same Speck source and CRuMB state
+cargo run -- run examples/keyboard_rectangle.spk
 
 # Bounded native run for smoke tests
 cargo run -- run examples/moving_rectangle.spk --frames 3
@@ -70,9 +78,16 @@ The original moving-rectangle example verifies browser and native presentation.
 functions, short-circuit conditions, and compound assignment. These remain
 verification sketches, not the contest game.
 
-`speck dev` builds a separate `_dev` executable, starts its native frame stream
-and a local HTTP viewer, and prints the exact viewer URL. It binds only to
-`127.0.0.1` unless `--bind` is supplied explicitly. See the
+`keyboard_rectangle.spk` is an infrastructure-only input smoke test. A/D or
+the arrow keys move its rectangle, Space toggles its color once per physical
+press, and Escape calls Speck's orderly `quit()`. The example deliberately
+contains no reusable movement, physics, Pong, platforming, or BOOTS mechanics;
+game behavior remains user-authored Speck code.
+
+`speck dev` builds a separate `_dev` executable, starts its full-duplex native
+frame/control stream and a local HTTP viewer, and prints the exact viewer URL.
+It runs without a frame limit by default and binds only to `127.0.0.1` unless
+`--bind` is supplied explicitly. `--frames N` keeps automation bounded. See the
 [development viewer guide](docs/development-viewer.md) for remote access over
 an SSH tunnel, frame limits, and the transport protocol.
 
@@ -84,15 +99,22 @@ resizing. Interactive runs are unbounded; closing the window or pressing Ctrl-C
 requests an orderly shutdown. `--frames N` supplies the finite private runtime
 limit used by automation. It does not change Speck language semantics.
 
+Speck exposes `key_down(key: i32) -> bool`, `key_pressed(key: i32) -> bool`,
+`key_released(key: i32) -> bool`, and `quit() -> void`. Predefined immutable
+constants cover W/A/S/D, arrows, Space, Enter, and Escape. Speck sees only these
+stable names and identifiers: AppKit key codes, browser `KeyboardEvent.code`,
+HTTP, TCP, and presenter events remain below the Speck/CRuMB boundary.
+
 ## Current limits
 
 This is an honest small compiler/runtime slice, not a general-purpose language
-or a finished tiny-game platform. There is no heap, garbage collector,
-input, audio, arrays, modules, or asset system. Graphics are currently limited
-to clearing the software framebuffer and drawing clipped filled rectangles.
-There is no keyboard, mouse, or controller input. The Cocoa presenter is a
-minimal macOS display path, and the browser viewer remains remote development
-tooling rather than game semantics. Numeric types do not convert implicitly;
+or a finished tiny-game platform. There is no heap, garbage collector, audio,
+arrays, modules, or asset system. Input is limited to eleven fixed digital keys;
+there is no mouse, controller, text entry, rebinding, or arbitrary key
+enumeration. Graphics are currently limited to clearing the software
+framebuffer and drawing clipped filled rectangles. The Cocoa presenter is a
+minimal macOS display/input path, and the browser viewer remains remote
+development tooling rather than game semantics. Numeric types do not convert implicitly;
 `i32(...)` and `f32(...)` make conversions explicit. Top-level immutable
 constants and mutable globals use compile-time expressions, while native
 executables use the host's dynamic system libraries.

@@ -23,7 +23,8 @@ artifact and is not a normal game distribution.
 ## Measured macOS ARM64 artifact
 
 On the audited macOS 26.5.2 ARM64 host, the native Cocoa build of
-`examples/moving_rectangle.spk` is a **53,400-byte** ARM64 Mach-O PIE. Its direct
+`examples/moving_rectangle.spk` is a **53,896-byte** ARM64 Mach-O PIE after the
+keyboard-input slice. Its direct
 dynamic loads are AppKit, CoreGraphics, CoreFoundation, `libobjc.A.dylib`, and
 `libSystem.B.dylib`; all are Apple system components. The executable contains
 the Objective-C window/view presenter and the portable framebuffer, but no
@@ -31,7 +32,7 @@ Rust, Swift, browser, JavaScript, networking, PPM presenter, or third-party
 framework.
 
 The same checkout's deterministic PPM build of `examples/framebuffer_rect.spk`
-is **34,368 bytes** and loads only `libSystem.B.dylib`. Its final PPM remains
+is **34,704 bytes** and loads only `libSystem.B.dylib`. Its final PPM remains
 172,815 bytes: a 15-byte P6 header followed by exactly 320x180x3 RGB bytes.
 
 These Mach-O sizes are recorded as host measurements. They must not be read as
@@ -54,6 +55,29 @@ otool -hv build/moving_rectangle_native
 otool -L build/moving_rectangle_native
 wc -c build/moving_rectangle_native
 ```
+
+## Keyboard-input slice delta
+
+The previous comparable `moving_rectangle_native` measurement was 53,400
+bytes. It is now 53,896 bytes, an increase of approximately **496 bytes**. This
+is the portable fixed input state plus Cocoa key translation and focus handling;
+no third-party runtime or new system framework was added. The input example
+itself is 54,072 bytes because its generated game code calls the new query and
+quit functions.
+
+For context, the comparable PPM `moving_rectangle` artifact increased from
+50,880 to 51,216 bytes (**+336 bytes**) because every shipped CRuMB variant owns
+the small portable state and safe query functions. The development stream
+variant increased from 51,336 to 51,912 bytes (**+576 bytes**) because it also
+contains the fixed control-record receiver. The Rust HTTP control endpoint,
+client ownership/lease policy, and embedded JavaScript are development-tool
+code and do not enter normal PPM or Cocoa game executables. Conversely, the
+development stream presenter is not linked into those shipped variants.
+
+Direct dynamic loads are unchanged: the Cocoa executable uses AppKit,
+CoreGraphics, CoreFoundation, `libobjc`, and `libSystem`; PPM and development
+stream executables load only `libSystem`. No third-party runtime dependency was
+added.
 
 ## Measured composition
 

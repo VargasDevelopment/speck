@@ -484,7 +484,7 @@ fn compile_runtime(
     presenter: Presenter,
 ) -> Result<Vec<PathBuf>, String> {
     let crumb_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime/crumb");
-    let common_sources = ["crumb.c", "framebuffer.c", presenter.source()];
+    let common_sources = ["crumb.c", "input.c", "framebuffer.c", presenter.source()];
     let sources = common_sources.into_iter().chain(
         environment
             .target

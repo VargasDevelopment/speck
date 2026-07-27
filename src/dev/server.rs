@@ -4,11 +4,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use super::protocol::{self, Frame};
+use super::protocol::{self, BrowserInput, ControlMessage, Frame};
 
 const VIEWER_HTML: &[u8] = include_bytes!("viewer.html");
+const INPUT_LEASE_TIMEOUT: Duration = Duration::from_secs(1);
+const HTTP_HEADER_MAX_BYTES: usize = 8192;
 
 #[derive(Clone, Default)]
 pub struct FrameStore {
@@ -79,6 +81,142 @@ impl FrameStore {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct InputControl {
+    shared: Arc<Mutex<InputControlState>>,
+}
+
+#[derive(Default)]
+struct InputControlState {
+    game: Option<TcpStream>,
+    owner: Option<String>,
+    last_seen: Option<Instant>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputResult {
+    Accepted,
+    Ignored,
+    Busy,
+    GameUnavailable,
+}
+
+impl InputControl {
+    pub fn connect_game(&self, stream: TcpStream) -> Result<(), String> {
+        stream
+            .set_write_timeout(Some(Duration::from_secs(1)))
+            .map_err(|error| format!("could not configure input control timeout: {error}"))?;
+        let mut state = self
+            .shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.game = Some(stream);
+        state.owner = None;
+        state.last_seen = None;
+        Ok(())
+    }
+
+    pub fn disconnect_game(&self) {
+        let mut state = self
+            .shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.game = None;
+        state.owner = None;
+        state.last_seen = None;
+    }
+
+    pub fn apply(&self, input: BrowserInput) -> InputResult {
+        if matches!(&input, BrowserInput::UnsupportedKey { .. }) {
+            return InputResult::Ignored;
+        }
+        let releases_control = matches!(&input, BrowserInput::ReleaseAll { .. });
+        let mut state = self
+            .shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.game.is_none() {
+            return InputResult::GameUnavailable;
+        }
+        let client = input.client();
+        if state.owner.as_deref().is_some_and(|owner| owner != client) {
+            return InputResult::Busy;
+        }
+        if state.owner.is_none() {
+            state.owner = Some(client.to_owned());
+        }
+        state.last_seen = Some(Instant::now());
+
+        let message = match input {
+            BrowserInput::Key { key, down, .. } => Some(ControlMessage::Key { key, down }),
+            BrowserInput::ReleaseAll { .. } => Some(ControlMessage::ReleaseAll),
+            BrowserInput::Heartbeat { .. } => None,
+            BrowserInput::UnsupportedKey { .. } => unreachable!(),
+        };
+        if let Some(message) = message
+            && !send_control(&mut state, message)
+        {
+            return InputResult::GameUnavailable;
+        }
+        if releases_control {
+            state.owner = None;
+            state.last_seen = None;
+        }
+        InputResult::Accepted
+    }
+
+    pub fn expire_lease(&self) {
+        let mut state = self
+            .shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.owner.is_some()
+            && state
+                .last_seen
+                .is_some_and(|last_seen| last_seen.elapsed() >= INPUT_LEASE_TIMEOUT)
+        {
+            let _ = send_control(&mut state, ControlMessage::ReleaseAll);
+            state.owner = None;
+            state.last_seen = None;
+        }
+    }
+
+    pub fn release_and_disconnect(&self) {
+        let mut state = self
+            .shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _ = send_control(&mut state, ControlMessage::ReleaseAll);
+        state.game = None;
+        state.owner = None;
+        state.last_seen = None;
+    }
+}
+
+fn send_control(state: &mut InputControlState, message: ControlMessage) -> bool {
+    let encoded = protocol::encode_control(message);
+    let sent = state
+        .game
+        .as_mut()
+        .is_some_and(|stream| stream.write_all(&encoded).is_ok());
+    if !sent {
+        state.game = None;
+        state.owner = None;
+        state.last_seen = None;
+    }
+    sent
+}
+
+pub fn spawn_input_watchdog(controls: InputControl, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
+    thread::spawn(move || {
+        while !shutdown.load(Ordering::Acquire) {
+            controls.expire_lease();
+            thread::sleep(Duration::from_millis(50));
+        }
+        controls.release_and_disconnect();
+    })
+}
+
 #[derive(Debug)]
 pub struct HttpBinding {
     pub listener: TcpListener,
@@ -129,6 +267,7 @@ fn binding(listener: TcpListener, used_fallback_port: bool) -> Result<HttpBindin
 pub fn spawn_http_server(
     listener: TcpListener,
     frames: FrameStore,
+    controls: InputControl,
     shutdown: Arc<AtomicBool>,
     fatal: Sender<String>,
 ) -> JoinHandle<()> {
@@ -137,8 +276,9 @@ pub fn spawn_http_server(
             match listener.accept() {
                 Ok((stream, _)) => {
                     let frames = frames.clone();
+                    let controls = controls.clone();
                     thread::spawn(move || {
-                        if let Err(error) = handle_http(stream, &frames) {
+                        if let Err(error) = handle_http(stream, &frames, &controls) {
                             eprintln!("Speck viewer request failed: {error}");
                         }
                     });
@@ -169,6 +309,7 @@ pub fn bind_frame_listener() -> Result<TcpListener, String> {
 pub fn spawn_frame_receiver(
     listener: TcpListener,
     frames: FrameStore,
+    controls: InputControl,
     shutdown: Arc<AtomicBool>,
     fatal: Sender<String>,
 ) -> JoinHandle<()> {
@@ -207,6 +348,21 @@ pub fn spawn_frame_receiver(
             frames.stop();
             return;
         }
+        let control_stream = match stream.try_clone() {
+            Ok(stream) => stream,
+            Err(error) => {
+                let _ = fatal.send(format!("could not clone game stream for input: {error}"));
+                shutdown.store(true, Ordering::Release);
+                frames.stop();
+                return;
+            }
+        };
+        if let Err(error) = controls.connect_game(control_stream) {
+            let _ = fatal.send(error);
+            shutdown.store(true, Ordering::Release);
+            frames.stop();
+            return;
+        }
         let mut last_sequence = 0;
         loop {
             match protocol::read_frame(&mut stream) {
@@ -230,20 +386,36 @@ pub fn spawn_frame_receiver(
                 }
             }
         }
+        controls.disconnect_game();
         frames.stop();
     })
 }
 
-fn handle_http(mut stream: TcpStream, frames: &FrameStore) -> Result<(), String> {
+fn handle_http(
+    mut stream: TcpStream,
+    frames: &FrameStore,
+    controls: &InputControl,
+) -> Result<(), String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(|error| format!("could not configure HTTP request timeout: {error}"))?;
     stream
         .set_write_timeout(Some(Duration::from_secs(3)))
         .map_err(|error| format!("could not configure HTTP response timeout: {error}"))?;
-    let path = read_request_path(&mut stream)?;
+    let request = match read_request(&mut stream) {
+        Ok(request) => request,
+        Err(error) => {
+            return respond(
+                &mut stream,
+                "400 Bad Request",
+                "text/plain",
+                &[],
+                format!("{error}\n").as_bytes(),
+            );
+        }
+    };
 
-    if path == "/" {
+    if request.method == "GET" && request.path == "/" {
         return respond(
             &mut stream,
             "200 OK",
@@ -252,10 +424,12 @@ fn handle_http(mut stream: TcpStream, frames: &FrameStore) -> Result<(), String>
             VIEWER_HTML,
         );
     }
-    if path == "/favicon.ico" {
+    if request.method == "GET" && request.path == "/favicon.ico" {
         return respond(&mut stream, "204 No Content", "text/plain", &[], &[]);
     }
-    if let Some(query) = path.strip_prefix("/frame") {
+    if request.method == "GET"
+        && let Some(query) = request.path.strip_prefix("/frame")
+    {
         if !query.is_empty() && !query.starts_with('?') {
             return respond(
                 &mut stream,
@@ -297,6 +471,48 @@ fn handle_http(mut stream: TcpStream, frames: &FrameStore) -> Result<(), String>
             &[],
         );
     }
+    if request.path == "/input" {
+        if request.method != "POST" {
+            return respond(
+                &mut stream,
+                "405 Method Not Allowed",
+                "text/plain",
+                &[("Allow", "POST")],
+                b"input requires POST\n",
+            );
+        }
+        let input = match protocol::parse_browser_input(&request.body) {
+            Ok(input) => input,
+            Err(error) => {
+                return respond(
+                    &mut stream,
+                    "400 Bad Request",
+                    "text/plain",
+                    &[],
+                    format!("{error}\n").as_bytes(),
+                );
+            }
+        };
+        return match controls.apply(input) {
+            InputResult::Accepted | InputResult::Ignored => {
+                respond(&mut stream, "204 No Content", "text/plain", &[], &[])
+            }
+            InputResult::Busy => respond(
+                &mut stream,
+                "409 Conflict",
+                "text/plain",
+                &[],
+                b"another viewer currently controls input\n",
+            ),
+            InputResult::GameUnavailable => respond(
+                &mut stream,
+                "503 Service Unavailable",
+                "text/plain",
+                &[],
+                b"game input is not connected\n",
+            ),
+        };
+    }
 
     respond(
         &mut stream,
@@ -307,35 +523,88 @@ fn handle_http(mut stream: TcpStream, frames: &FrameStore) -> Result<(), String>
     )
 }
 
-fn read_request_path(stream: &mut TcpStream) -> Result<String, String> {
+struct HttpRequest {
+    method: String,
+    path: String,
+    body: Vec<u8>,
+}
+
+fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];
-    while request.len() < 8192 && !request.windows(4).any(|window| window == b"\r\n\r\n") {
+    let header_end = loop {
+        if let Some(position) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            break position + 4;
+        }
+        if request.len() >= HTTP_HEADER_MAX_BYTES {
+            return Err(format!(
+                "HTTP request headers exceeded {HTTP_HEADER_MAX_BYTES} bytes"
+            ));
+        }
         let read = stream
             .read(&mut buffer)
             .map_err(|error| format!("could not read HTTP request: {error}"))?;
         if read == 0 {
-            break;
+            return Err("HTTP request ended before its headers were complete".into());
         }
         request.extend_from_slice(&buffer[..read]);
+    };
+    if header_end > HTTP_HEADER_MAX_BYTES {
+        return Err(format!(
+            "HTTP request headers exceeded {HTTP_HEADER_MAX_BYTES} bytes"
+        ));
     }
-    if request.len() >= 8192 {
-        return Err("HTTP request headers exceeded 8192 bytes".into());
-    }
-    let request = std::str::from_utf8(&request)
+    let headers = std::str::from_utf8(&request[..header_end])
         .map_err(|_| "HTTP request headers were not UTF-8".to_owned())?;
-    let mut parts = request
-        .lines()
+    let mut lines = headers.lines();
+    let mut parts = lines
         .next()
         .ok_or_else(|| "HTTP request was empty".to_owned())?
         .split_whitespace();
-    if parts.next() != Some("GET") {
-        return Err("development viewer only accepts GET requests".into());
-    }
-    parts
+    let method = parts
         .next()
-        .map(str::to_owned)
-        .ok_or_else(|| "HTTP request did not include a path".into())
+        .ok_or_else(|| "HTTP request did not include a method".to_owned())?
+        .to_owned();
+    if !matches!(method.as_str(), "GET" | "POST") {
+        return Err("development viewer only accepts GET and POST requests".into());
+    }
+    let path = parts
+        .next()
+        .ok_or_else(|| "HTTP request did not include a path".to_owned())?
+        .to_owned();
+    let mut content_length = 0_usize;
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("Content-Length")
+        {
+            content_length = value
+                .trim()
+                .parse()
+                .map_err(|_| "HTTP Content-Length was not an unsigned integer".to_owned())?;
+        }
+    }
+    if content_length > protocol::BROWSER_INPUT_MAX_BYTES {
+        return Err(format!(
+            "HTTP request body exceeded {} bytes",
+            protocol::BROWSER_INPUT_MAX_BYTES
+        ));
+    }
+    while request.len() < header_end + content_length {
+        let remaining = header_end + content_length - request.len();
+        let chunk = remaining.min(buffer.len());
+        let read = stream
+            .read(&mut buffer[..chunk])
+            .map_err(|error| format!("could not read HTTP request body: {error}"))?;
+        if read == 0 {
+            return Err("HTTP request body was truncated".into());
+        }
+        request.extend_from_slice(&buffer[..read]);
+    }
+    Ok(HttpRequest {
+        method,
+        path,
+        body: request[header_end..header_end + content_length].to_vec(),
+    })
 }
 
 fn parse_after(query: &str) -> Result<u64, String> {
@@ -382,7 +651,9 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
-    use crate::dev::protocol::{FRAME_HEIGHT, FRAME_PAYLOAD_BYTES, FRAME_WIDTH};
+    use crate::dev::protocol::{
+        FRAME_HEIGHT, FRAME_PAYLOAD_BYTES, FRAME_WIDTH, Key, decode_control,
+    };
 
     #[test]
     fn serves_viewer_and_complete_binary_frame() {
@@ -390,14 +661,29 @@ mod tests {
             .expect("HTTP listener should bind");
         let address = binding.address;
         let frames = FrameStore::default();
+        let controls = InputControl::default();
         let shutdown = Arc::new(AtomicBool::new(false));
         let (fatal_tx, _fatal_rx) = mpsc::channel();
-        let thread =
-            spawn_http_server(binding.listener, frames.clone(), shutdown.clone(), fatal_tx);
+        let thread = spawn_http_server(
+            binding.listener,
+            frames.clone(),
+            controls,
+            shutdown.clone(),
+            fatal_tx,
+        );
 
         let page = get(address, "/");
         assert!(page.starts_with(b"HTTP/1.1 200 OK"));
         assert!(page.windows(7).any(|window| window == b"<canvas"));
+        let page_text = String::from_utf8_lossy(&page);
+        assert!(page_text.contains("event.code"));
+        assert!(page_text.contains("event.repeat"));
+        assert!(page_text.contains("event.preventDefault()"));
+        assert!(page_text.contains("visibilitychange"));
+        assert!(page_text.contains("pagehide"));
+        assert!(page_text.contains("releaseAll"));
+        assert!(page_text.contains("heartbeat"));
+        assert!(page_text.contains("inputQueue = inputQueue.then"));
 
         let pixels = vec![73_u8; FRAME_PAYLOAD_BYTES];
         frames.publish(Frame {
@@ -433,6 +719,164 @@ mod tests {
             .read_to_end(&mut response)
             .expect("response should read");
         response
+    }
+
+    fn post(address: SocketAddr, path: &str, body: &[u8]) -> Vec<u8> {
+        let mut stream = TcpStream::connect(address).expect("test should connect");
+        write!(
+            stream,
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .expect("request headers should write");
+        stream.write_all(body).expect("request body should write");
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .expect("response should read");
+        response
+    }
+
+    fn connected_controls() -> (InputControl, TcpStream) {
+        let listener =
+            TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("control listener should bind");
+        let address = listener.local_addr().expect("address should exist");
+        let game = TcpStream::connect(address).expect("game peer should connect");
+        game.set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("read timeout should configure");
+        let (host, _) = listener.accept().expect("host peer should accept");
+        let controls = InputControl::default();
+        controls
+            .connect_game(host)
+            .expect("game control should connect");
+        (controls, game)
+    }
+
+    fn read_control(game: &mut TcpStream) -> ControlMessage {
+        let mut bytes = [0_u8; protocol::CONTROL_MESSAGE_BYTES];
+        game.read_exact(&mut bytes)
+            .expect("control record should arrive");
+        decode_control(&bytes).expect("control record should be valid")
+    }
+
+    #[test]
+    fn browser_input_reaches_game_with_single_controller_ownership() {
+        let binding = bind_http(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, false)
+            .expect("HTTP listener should bind");
+        let address = binding.address;
+        let (controls, mut game) = connected_controls();
+        let frames = FrameStore::default();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (fatal_tx, _fatal_rx) = mpsc::channel();
+        let thread = spawn_http_server(
+            binding.listener,
+            frames,
+            controls.clone(),
+            shutdown.clone(),
+            fatal_tx,
+        );
+
+        let response = post(address, "/input", b"viewer-1 down ArrowLeft");
+        assert!(response.starts_with(b"HTTP/1.1 204 No Content"));
+        assert_eq!(
+            read_control(&mut game),
+            ControlMessage::Key {
+                key: Key::Left,
+                down: true
+            }
+        );
+
+        let repeated = post(address, "/input", b"viewer-1 down ArrowLeft");
+        assert!(repeated.starts_with(b"HTTP/1.1 204 No Content"));
+        assert_eq!(
+            read_control(&mut game),
+            ControlMessage::Key {
+                key: Key::Left,
+                down: true
+            }
+        );
+
+        let busy = post(address, "/input", b"viewer-2 down KeyD");
+        assert!(busy.starts_with(b"HTTP/1.1 409 Conflict"));
+
+        let release = post(address, "/input", b"viewer-1 release -");
+        assert!(release.starts_with(b"HTTP/1.1 204 No Content"));
+        assert_eq!(read_control(&mut game), ControlMessage::ReleaseAll);
+
+        let next = post(address, "/input", b"viewer-2 down KeyD");
+        assert!(next.starts_with(b"HTTP/1.1 204 No Content"));
+        assert_eq!(
+            read_control(&mut game),
+            ControlMessage::Key {
+                key: Key::D,
+                down: true
+            }
+        );
+
+        shutdown.store(true, Ordering::Release);
+        thread.join().expect("HTTP thread should stop");
+    }
+
+    #[test]
+    fn malformed_oversized_and_unsupported_browser_input_is_safe() {
+        let binding = bind_http(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, false)
+            .expect("HTTP listener should bind");
+        let address = binding.address;
+        let (controls, _game) = connected_controls();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (fatal_tx, _fatal_rx) = mpsc::channel();
+        let thread = spawn_http_server(
+            binding.listener,
+            FrameStore::default(),
+            controls,
+            shutdown.clone(),
+            fatal_tx,
+        );
+
+        assert!(post(address, "/input", b"broken").starts_with(b"HTTP/1.1 400 Bad Request"));
+        assert!(
+            post(
+                address,
+                "/input",
+                &[b'x'; protocol::BROWSER_INPUT_MAX_BYTES + 1]
+            )
+            .starts_with(b"HTTP/1.1 400 Bad Request")
+        );
+        assert!(
+            post(address, "/input", b"viewer-1 down KeyQ").starts_with(b"HTTP/1.1 204 No Content")
+        );
+
+        shutdown.store(true, Ordering::Release);
+        thread.join().expect("HTTP thread should stop");
+    }
+
+    #[test]
+    fn disconnect_and_expired_controller_lease_release_all_keys() {
+        let (controls, mut game) = connected_controls();
+        assert_eq!(
+            controls.apply(BrowserInput::Heartbeat {
+                client: "viewer-1".into()
+            }),
+            InputResult::Accepted
+        );
+        thread::sleep(INPUT_LEASE_TIMEOUT + Duration::from_millis(20));
+        controls.expire_lease();
+        assert_eq!(read_control(&mut game), ControlMessage::ReleaseAll);
+
+        assert_eq!(
+            controls.apply(BrowserInput::Heartbeat {
+                client: "viewer-2".into()
+            }),
+            InputResult::Accepted
+        );
+        controls.release_and_disconnect();
+        assert_eq!(read_control(&mut game), ControlMessage::ReleaseAll);
+        assert_eq!(
+            controls.apply(BrowserInput::Heartbeat {
+                client: "viewer-2".into()
+            }),
+            InputResult::GameUnavailable
+        );
     }
 
     #[test]

@@ -5,6 +5,7 @@ use crate::ast::{
     AssignOp, BinaryOp, Block, ConstantValue, Expr, ExprKind, Function, FunctionKind, Program,
     ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
 };
+use crate::builtins;
 
 #[derive(Clone)]
 struct Signature {
@@ -51,18 +52,18 @@ pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String
             )
         })
         .collect();
-    let constants = program
-        .constants
+    let mut constants = builtins::CONSTANTS
         .iter()
-        .map(|constant| {
-            (
-                constant.name.clone(),
-                constant
-                    .value
-                    .expect("semantic checking evaluates every constant"),
-            )
-        })
-        .collect();
+        .map(|constant| (constant.name.to_owned(), constant.value))
+        .collect::<HashMap<_, _>>();
+    constants.extend(program.constants.iter().map(|constant| {
+        (
+            constant.name.clone(),
+            constant
+                .value
+                .expect("semantic checking evaluates every constant"),
+        )
+    }));
 
     let mut output = String::new();
     writeln!(
@@ -77,10 +78,22 @@ pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String
             .expect("writing to a string cannot fail");
     }
     output.push('\n');
-    output.push_str("declare void @crumb_print_i32(i32)\n");
-    output.push_str("declare void @crumb_debug_frame(i32, float)\n");
-    output.push_str("declare void @crumb_clear_rgb(i32, i32, i32)\n");
-    output.push_str("declare void @crumb_fill_rect(i32, i32, i32, i32, i32, i32, i32)\n\n");
+    for builtin in builtins::FUNCTIONS {
+        let params = builtin
+            .params
+            .iter()
+            .map(|ty| llvm_value_type(*ty))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            output,
+            "declare {} {}({params})",
+            llvm_return_type(builtin.return_type),
+            builtin.llvm_symbol
+        )
+        .expect("writing to a string cannot fail");
+    }
+    output.push('\n');
 
     for global in &program.globals {
         let value = global
@@ -111,36 +124,18 @@ pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String
 }
 
 fn function_signatures(program: &Program) -> HashMap<String, Signature> {
-    let mut signatures = HashMap::from([
-        (
-            "print_i32".into(),
-            Signature {
-                return_type: ReturnType::Void,
-                symbol: "@crumb_print_i32".into(),
-            },
-        ),
-        (
-            "debug_frame".into(),
-            Signature {
-                return_type: ReturnType::Void,
-                symbol: "@crumb_debug_frame".into(),
-            },
-        ),
-        (
-            "clear_rgb".into(),
-            Signature {
-                return_type: ReturnType::Void,
-                symbol: "@crumb_clear_rgb".into(),
-            },
-        ),
-        (
-            "fill_rect".into(),
-            Signature {
-                return_type: ReturnType::Void,
-                symbol: "@crumb_fill_rect".into(),
-            },
-        ),
-    ]);
+    let mut signatures = builtins::FUNCTIONS
+        .iter()
+        .map(|builtin| {
+            (
+                builtin.name.to_owned(),
+                Signature {
+                    return_type: builtin.return_type,
+                    symbol: builtin.llvm_symbol.to_owned(),
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
     for function in &program.functions {
         if function.kind == FunctionKind::Named {
             signatures.insert(
@@ -803,5 +798,28 @@ draw {}
         assert!(ir.contains("phi i1"));
         assert!(ir.contains("fadd float"));
         assert!(ir.contains("mul i32"));
+    }
+
+    #[test]
+    fn emits_input_abi_calls_and_inlines_predefined_keys() {
+        let source = r#"game "Input IR"
+let held: bool = false
+start {}
+update(dt: f32) {
+    held = key_down(KEY_LEFT)
+    if key_pressed(KEY_SPACE) || key_released(KEY_ENTER) { quit() }
+}
+draw {}
+"#;
+        let ir = compile_to_llvm(source).expect("input program should compile");
+        assert!(ir.contains("declare i1 @crumb_key_down(i32)"));
+        assert!(ir.contains("declare i1 @crumb_key_pressed(i32)"));
+        assert!(ir.contains("declare i1 @crumb_key_released(i32)"));
+        assert!(ir.contains("declare void @crumb_request_quit()"));
+        assert!(ir.contains("call i1 @crumb_key_down(i32 6)"));
+        assert!(ir.contains("call i1 @crumb_key_pressed(i32 8)"));
+        assert!(ir.contains("call i1 @crumb_key_released(i32 9)"));
+        assert!(ir.contains("call void @crumb_request_quit()"));
+        assert!(!ir.contains("@spk_global_KEY_"));
     }
 }

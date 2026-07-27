@@ -100,11 +100,31 @@ The interactive command is:
 cargo run -- run examples/moving_rectangle.spk
 ```
 
-It produced a 53,400-byte ARM64 Mach-O on this host. A three-frame bounded run,
+It produced a 53,400-byte ARM64 Mach-O before keyboard input was added. A three-frame bounded run,
 window display, changing rectangle, standard window-close shutdown, SIGINT
 shutdown, PPM regression, and browser-stream regression were verified without
 installing packages or changing system configuration. The Cocoa code is not
 selected for Linux, PPM, or stream artifacts.
+
+### Presenter-independent keyboard input audit
+
+The keyboard slice was completed on 2026-07-26 with the same Rust 1.97.1,
+Cargo 1.97.1, Apple Clang/clang-format 21.0.0, Apple `ld` 1267, macOS 26.5 SDK,
+and ARM64 target. No packages, frameworks, or system configuration were added.
+All C11 and Objective-C sources passed `-Wall -Wextra -Wpedantic -Werror` and
+clang-format 21's strict dry run.
+
+The comparable native `moving_rectangle` artifact is now 53,896 bytes, +496
+bytes from its pre-input 53,400-byte measurement. Framework loads are unchanged.
+The full 68-test current-host suite, bounded PPM/browser/native runs, real Chrome
+Space/Escape input, held-state movement over the browser control path, and
+parent/child clean shutdown were exercised. A macOS-only Objective-C harness
+sent AppKit events through the real Cocoa view and verified A, Escape, repeat
+suppression, key-up, and delegate focus-loss release. The command-line Cocoa
+process launched and stopped cleanly, but the available desktop automation
+could not attach physical key events to that unbundled process; native physical
+key interaction remains an explicit user acceptance command rather than a
+claimed automated observation.
 
 ## Original Linux x86-64 audit
 

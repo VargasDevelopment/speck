@@ -8,6 +8,8 @@
 
 int crumb_present_init(void) { return CRUMB_PRESENT_CONTINUE; }
 
+int crumb_present_poll(void) { return CRUMB_PRESENT_CONTINUE; }
+
 int crumb_present(void) {
     static const char header[] = "P6\n" CRUMB_STRINGIFY(
         CRUMB_FRAMEBUFFER_WIDTH) " " CRUMB_STRINGIFY(CRUMB_FRAMEBUFFER_HEIGHT) "\n255\n";

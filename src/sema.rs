@@ -4,6 +4,7 @@ use crate::ast::{
     AssignOp, BinaryOp, Block, ConstantValue, Expr, ExprKind, Function, FunctionKind, Program,
     ReturnType, Stmt, StmtKind, UnaryOp, ValueType,
 };
+use crate::builtins;
 use crate::diagnostic::{Diagnostic, Span};
 
 #[derive(Clone)]
@@ -20,14 +21,32 @@ struct Binding {
 
 pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
-    let mut constants = HashMap::new();
+    let mut constants = builtins::CONSTANTS
+        .iter()
+        .map(|constant| (constant.name.to_owned(), constant.value.ty()))
+        .collect::<HashMap<_, _>>();
     let mut globals = HashMap::new();
     let mut top_level_names: HashMap<String, &'static str> = builtins()
         .into_keys()
         .map(|name| (name, "function"))
         .collect();
+    top_level_names.extend(
+        builtins::CONSTANTS
+            .iter()
+            .map(|constant| (constant.name.to_owned(), "predefined constant")),
+    );
 
     for constant in &program.constants {
+        if builtins::predefined_constant(&constant.name).is_some() {
+            diagnostics.push(Diagnostic::new(
+                format!(
+                    "constant `{}` conflicts with a predefined key constant",
+                    constant.name
+                ),
+                constant.span,
+            ));
+            continue;
+        }
         if constants
             .insert(constant.name.clone(), constant.ty)
             .is_some()
@@ -302,36 +321,18 @@ fn validate_compile_time_structure(
 }
 
 fn builtins() -> HashMap<String, Signature> {
-    HashMap::from([
-        (
-            "print_i32".into(),
-            Signature {
-                params: vec![ValueType::I32],
-                return_type: ReturnType::Void,
-            },
-        ),
-        (
-            "debug_frame".into(),
-            Signature {
-                params: vec![ValueType::I32, ValueType::F32],
-                return_type: ReturnType::Void,
-            },
-        ),
-        (
-            "clear_rgb".into(),
-            Signature {
-                params: vec![ValueType::I32, ValueType::I32, ValueType::I32],
-                return_type: ReturnType::Void,
-            },
-        ),
-        (
-            "fill_rect".into(),
-            Signature {
-                params: vec![ValueType::I32; 7],
-                return_type: ReturnType::Void,
-            },
-        ),
-    ])
+    builtins::FUNCTIONS
+        .iter()
+        .map(|builtin| {
+            (
+                builtin.name.to_owned(),
+                Signature {
+                    params: builtin.params.to_vec(),
+                    return_type: builtin.return_type,
+                },
+            )
+        })
+        .collect()
 }
 
 fn check_function(
@@ -349,6 +350,15 @@ fn check_function(
         diagnostics,
     );
     for param in &function.params {
+        if builtins::predefined_constant(&param.name).is_some() {
+            checker.error(
+                format!(
+                    "parameter `{}` conflicts with a predefined key constant",
+                    param.name
+                ),
+                param.span,
+            );
+        }
         if checker.scopes[0]
             .insert(
                 param.name.clone(),
@@ -420,6 +430,12 @@ impl<'a> FunctionChecker<'a> {
     fn check_statement(&mut self, statement: &Stmt) {
         match &statement.kind {
             StmtKind::Let { name, ty, init } => {
+                if builtins::predefined_constant(name).is_some() {
+                    self.error(
+                        format!("variable `{name}` conflicts with a predefined key constant"),
+                        statement.span,
+                    );
+                }
                 if let Some(actual) = self.require_value(init, "variable initializer")
                     && actual != *ty
                 {
@@ -802,7 +818,10 @@ impl<'a> ConstantEvaluator<'a> {
             globals,
             invalid,
             states: HashMap::new(),
-            values: HashMap::new(),
+            values: builtins::CONSTANTS
+                .iter()
+                .map(|constant| (constant.name.to_owned(), constant.value))
+                .collect(),
             stack: Vec::new(),
         }
     }
@@ -875,6 +894,7 @@ impl<'a> ConstantEvaluator<'a> {
 
     fn evaluate_expr(&mut self, expression: &Expr) -> Result<ConstantValue, Diagnostic> {
         match &expression.kind {
+            ExprKind::Variable(name) if self.values.contains_key(name) => Ok(self.values[name]),
             ExprKind::Variable(name) if self.definitions.contains_key(name) => {
                 self.evaluate_named(name)
             }
@@ -1493,6 +1513,72 @@ draw {}
             error
                 .message
                 .contains("constant expressions cannot reference mutable global `mutable`")
+        }));
+    }
+
+    #[test]
+    fn validates_input_builtins_and_predefined_key_constants() {
+        checked(
+            r#"game "Input"
+const FIRST: i32 = KEY_W
+let combined: i32 = KEY_A + KEY_S + KEY_D + KEY_UP + KEY_DOWN + KEY_LEFT + KEY_RIGHT + KEY_SPACE + KEY_ENTER + KEY_ESCAPE
+start { quit() }
+update(dt: f32) {
+    if key_down(KEY_W) || key_pressed(KEY_SPACE) || key_released(KEY_ENTER) {}
+}
+draw {}
+"#,
+        );
+
+        let errors = errors(
+            r#"game "Bad input"
+const KEY_W: i32 = 100
+let KEY_A: i32 = 1
+fn KEY_S() -> void {}
+start {
+    key_down(true)
+    key_pressed()
+    key_released(KEY_D, KEY_W)
+    let value: i32 = quit()
+}
+update(dt: f32) {}
+draw {}
+"#,
+        );
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("constant `KEY_W` conflicts with a predefined key constant")
+        }));
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("global `KEY_A` conflicts with an existing predefined constant")
+        }));
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("function `KEY_S` conflicts with an existing predefined constant")
+        }));
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("argument 1 to `key_down` expects `i32`, but found `bool`")
+        }));
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("function `key_pressed` expects 1 argument(s), but received 0")
+        }));
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("function `key_released` expects 1 argument(s), but received 2")
+        }));
+        assert!(errors.iter().any(|error| {
+            error
+                .message
+                .contains("variable initializer requires a value, but found `void`")
         }));
     }
 }

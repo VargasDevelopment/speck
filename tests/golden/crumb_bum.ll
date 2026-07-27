@@ -5,6 +5,10 @@ declare void @crumb_print_i32(i32)
 declare void @crumb_debug_frame(i32, float)
 declare void @crumb_clear_rgb(i32, i32, i32)
 declare void @crumb_fill_rect(i32, i32, i32, i32, i32, i32, i32)
+declare i1 @crumb_key_down(i32)
+declare i1 @crumb_key_pressed(i32)
+declare i1 @crumb_key_released(i32)
+declare void @crumb_request_quit()
 
 @spk_global_x = internal global float 0x4024000000000000
 @spk_global_velocity = internal global float 0x409C200000000000

@@ -182,3 +182,51 @@ introduced.
 
 The quoted game title is compile-time metadata, not a general-purpose string
 value. Strings are otherwise absent from the type system.
+
+## Digital keyboard input and shutdown
+
+The presenter-independent input built-ins are:
+
+- `key_down(key: i32) -> bool`
+- `key_pressed(key: i32) -> bool`
+- `key_released(key: i32) -> bool`
+- `quit() -> void`
+
+Speck predefines these immutable `i32` constants:
+
+```text
+KEY_W       KEY_A       KEY_S       KEY_D
+KEY_UP      KEY_DOWN    KEY_LEFT    KEY_RIGHT
+KEY_SPACE   KEY_ENTER   KEY_ESCAPE
+```
+
+They may be used wherever an `i32` value is valid, including compile-time
+constant expressions. User constants, globals, functions, parameters, and
+locals may not silently replace the predefined names. The numeric identifiers
+are an internal CRuMB ABI detail; Speck programs should use the names. Passing
+any other integer is safe and returns `false` from all three query functions.
+
+`key_down` remains true for every frame during which a key is held.
+`key_pressed` is true during exactly the frame that observes an up-to-down
+transition, and `key_released` is true during exactly the frame that observes a
+down-to-up transition. Native or browser repeat events while a key remains down
+do not create another press. If both transitions arrive between two updates,
+both one-frame queries are true in the next frame and `key_down` is false.
+
+Each interactive frame clears the previous one-frame flags, pumps presenter
+events, applies all pending key transitions, runs `update(dt)`, runs `draw`, and
+presents the completed framebuffer. The three input queries therefore remain
+stable throughout both lifecycle blocks. PPM presentation has no event source,
+so it reports every key up unless a test harness explicitly manipulates CRuMB's
+private input state.
+
+`quit()` is effect-only and cannot be used as a value. It sets a CRuMB-owned
+request flag rather than terminating inside generated code. If called from
+`update` or `draw`, the current update/draw/present cycle completes and the loop
+shuts down before beginning another frame. Closing the native window may stop
+before another update begins because close is observed during event polling.
+
+Cocoa hardware codes and browser `KeyboardEvent.code` strings are not Speck
+language values. Presenters translate them into CRuMB's fixed identifiers.
+Movement, jumping, collision, Pong rules, and other game mechanics remain
+ordinary user-authored Speck code.

@@ -94,11 +94,7 @@ static int crumb_frame_limit(void) {
     long value;
 
     if (text == NULL) {
-#ifdef CRUMB_DEVELOPMENT
-        return 1800;
-#else
         return 0;
-#endif
     }
     errno = 0;
     value = strtol(text, &end, 10);
@@ -112,6 +108,7 @@ static int crumb_frame_limit(void) {
 }
 
 int crumb_init(void) {
+    crumb_input_reset();
     crumb_clear_rgb(0, 0, 0);
     return crumb_present_init();
 }
@@ -122,7 +119,10 @@ void crumb_print_i32(int value) { printf("%d\n", value); }
 
 void crumb_debug_frame(int frame, float value) { printf("frame %d: %.3f\n", frame, (double)value); }
 
-void crumb_shutdown(void) { crumb_present_shutdown(); }
+void crumb_shutdown(void) {
+    crumb_input_release_all();
+    crumb_present_shutdown();
+}
 
 int crumb_run(void) {
     uint64_t frames_completed = 0;
@@ -155,9 +155,20 @@ int crumb_run(void) {
     }
 #endif
     while ((frame_limit == 0 || frames_completed < (uint64_t)frame_limit) &&
-           !crumb_platform_should_stop()) {
+           !crumb_platform_should_stop() && !crumb_quit_requested()) {
         int presentation;
 
+        crumb_input_begin_frame();
+        presentation = crumb_present_poll();
+        if (presentation == CRUMB_PRESENT_ERROR) {
+            fputs("CRuMB presenter event polling failed\n", stderr);
+            crumb_shutdown();
+            crumb_platform_shutdown();
+            return 1;
+        }
+        if (presentation == CRUMB_PRESENT_STOP || crumb_platform_should_stop()) {
+            break;
+        }
         spk_update(dt);
         spk_draw();
         presentation = crumb_present();
@@ -169,6 +180,7 @@ int crumb_run(void) {
             return 1;
         }
         if (presentation == CRUMB_PRESENT_STOP || crumb_platform_should_stop() ||
+            crumb_quit_requested() ||
             (frame_limit != 0 && frames_completed >= (uint64_t)frame_limit)) {
             break;
         }
