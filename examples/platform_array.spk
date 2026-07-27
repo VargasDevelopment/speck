@@ -1,4 +1,7 @@
-game "Platform Array"
+game "Platform Data Test"
+
+const SCREEN_WIDTH: i32 = 320
+const SCREEN_HEIGHT: i32 = 180
 
 struct Platform {
     x: i32
@@ -56,13 +59,15 @@ fn draw_platform(platform: Platform) -> void {
 
 start {}
 
-update(dt: f32) {}
+update(dt: f32) {
+    if key_pressed(KEY_ESCAPE) {
+        quit()
+    }
+}
 
 draw {
     clear_rgb(32, 18, 32)
-    let index: i32 = 0
-    while index < PLATFORM_COUNT {
-        draw_platform(PLATFORMS[index])
-        index += 1
+    for i in 0..PLATFORM_COUNT {
+        draw_platform(PLATFORMS[i])
     }
 }

@@ -23,13 +23,15 @@ array_length  = integer | identifier ;
 return_type   = value_type | "void" ;
 
 block         = "{" statement* "}" ;
-statement     = local | assignment | if | while | return | expression ";"? ;
+statement     = local | assignment | if | while | for | return
+              | expression ";"? ;
 local         = "let" identifier ":" value_type "=" expression ";"? ;
 assignment    = assignable ("=" | "+=" | "-=" | "*=" | "/=")
                 expression ";"? ;
 assignable    = postfix ;
 if            = "if" expression block ("else" block)? ;
 while         = "while" expression block ;
+for           = "for" identifier "in" expression ".." expression block ;
 return        = "return" expression? ";"? ;
 
 expression    = logical_or ;
@@ -54,7 +56,7 @@ field_initializer = identifier ":" expression ","? ;
 `i32(...)` and `f32(...)` are conversion expressions, not function calls.
 Their type names are reserved only where the grammar already expects a type or
 conversion. The lexer uses longest-match rules for `+=`, `-=`, `*=`, `/=`,
-`<=`, `>=`, `==`, `!=`, `&&`, `||`, and `->`.
+`<=`, `>=`, `==`, `!=`, `&&`, `||`, `->`, and `..`.
 
 ## Types and functions
 
@@ -314,6 +316,30 @@ Assignment remains a statement and does not produce a value.
 
 Locals use lexical block scope and may shadow outer names. Parameters preserve
 Speck's existing mutable behavior.
+
+## Exclusive range loops
+
+The narrow `for` statement iterates upward by exactly one over a
+lower-inclusive, upper-exclusive `i32` range:
+
+```text
+for i in 0..PLATFORM_COUNT {
+    draw_platform(PLATFORMS[i])
+}
+```
+
+The lower bound is evaluated once, then the upper bound is evaluated once,
+before the first condition check. Both must have type `i32`. The loop variable
+is a new read-only `i32` binding scoped to the loop body; it may shadow an outer
+name, and nested loops may shadow it again. Assigning or compound-assigning to
+the loop variable is an error.
+
+At each iteration Speck checks `i < upper`, runs the body when true, and then
+increments `i` by one. A lower bound greater than or equal to the upper bound
+therefore runs zero iterations. Negative bounds work normally. `..` is accepted
+only in this statement syntax: ranges are not values. There is no inclusive
+range, custom or negative step, array-item iteration, iterator protocol,
+`break`, `continue`, or loop expression.
 
 ## CRuMB functions and graphics
 

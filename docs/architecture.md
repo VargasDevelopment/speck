@@ -53,6 +53,14 @@ paths produce zero or a clamp value, and only a proven in-range path executes
 the conversion. User functions and all effect-only CRuMB declarations emit
 actual LLVM `void`, `call void`, and `ret void` forms.
 
+The range `for` statement has its own small AST node rather than introducing a
+range expression or runtime type. Semantic analysis checks both bounds before
+opening a child scope containing one read-only `i32` loop binding. LLVM
+evaluates lower then upper once in the preheader, stores the current index in
+an `i32` stack slot, branches on signed `icmp slt`, emits the existing block
+lowering, and adds one on the back edge. No CRuMB call or iterator ABI is
+involved.
+
 Assignment targets now retain expression structure. Semantic lvalue validation
 recursively walks any alternating sequence of indexed elements and struct
 fields back to its root binding, carries the selected type and root mutability
@@ -253,6 +261,8 @@ tool. They do not appear in a generated normal game executable.
 - Software drawing is limited to clear and filled rectangles in RGB888 format.
 - Global initialization is deliberately compile-time-only; local constants and
   general compile-time execution do not exist.
+- Range loops support only an exclusive `i32` upper bound and unit positive
+  stepping. There are no range values, array iterators, `break`, or `continue`.
 - Constant evaluation diagnoses integer overflow and division by zero. Runtime
   integer overflow and division-by-zero behavior remain provisional.
 - The backend emits straightforward stack-based IR and relies on Clang's LLVM

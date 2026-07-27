@@ -46,7 +46,7 @@ cargo run -- build examples/array_values.spk
 cargo run -- build examples/platform_value.spk
 ./build/platform_value
 
-# Arrays and structs composed as allocation-free level data
+# Allocation-free level data traversed by an exclusive range loop
 cargo run -- build examples/platform_array.spk
 ./build/platform_array
 
@@ -124,7 +124,9 @@ or a finished tiny-game platform. There is no heap, garbage collector, audio,
 dynamic arrays, slices, modules, or asset system. Fixed-size explicitly typed
 arrays use native value storage and checked `i32` indexing. Named structs are
 fixed-layout values with no object runtime; the two aggregate forms compose
-recursively for allocation-free level data. Input is limited to eleven fixed
+recursively for allocation-free level data. A narrow `for i in lower..upper`
+statement provides exclusive, unit-step `i32` iteration without range objects
+or iterator protocols. Input is limited to eleven fixed
 digital keys;
 there is no mouse, controller, text entry, rebinding, or arbitrary key
 enumeration. Graphics are currently limited to clearing the software

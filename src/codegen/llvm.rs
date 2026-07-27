@@ -380,6 +380,13 @@ impl<'a> FunctionEmitter<'a> {
                 else_block,
             } => self.if_statement(condition, then_block, else_block.as_ref()),
             StmtKind::While { condition, body } => self.while_statement(condition, body),
+            StmtKind::For {
+                name,
+                lower,
+                upper,
+                body,
+                ..
+            } => self.for_statement(name, lower, upper, body),
             StmtKind::Return(value) => {
                 if let Some(value) = value {
                     let value = self.expression(value);
@@ -455,6 +462,52 @@ impl<'a> FunctionEmitter<'a> {
         self.place_label(&body_label);
         self.nested_block(body);
         if !self.terminated {
+            self.terminate(format!("br label %{condition_label}"));
+        }
+
+        self.place_label(&end_label);
+    }
+
+    fn for_statement(&mut self, name: &str, lower: &Expr, upper: &Expr, body: &Block) {
+        let lower = self.expression(lower);
+        let upper = self.expression(upper);
+        let pointer = self.temp();
+        self.instruction(format!("{pointer} = alloca i32"));
+        self.instruction(format!("store i32 {}, ptr {pointer}", lower.repr));
+
+        let condition_label = self.label("for_condition");
+        let body_label = self.label("for_body");
+        let end_label = self.label("for_end");
+        self.terminate(format!("br label %{condition_label}"));
+
+        self.place_label(&condition_label);
+        let current = self.temp();
+        self.instruction(format!("{current} = load i32, ptr {pointer}"));
+        let in_range = self.temp();
+        self.instruction(format!(
+            "{in_range} = icmp slt i32 {current}, {}",
+            upper.repr
+        ));
+        self.terminate(format!(
+            "br i1 {in_range}, label %{body_label}, label %{end_label}"
+        ));
+
+        self.place_label(&body_label);
+        self.scopes.push(HashMap::from([(
+            name.to_owned(),
+            Variable {
+                ty: ValueType::I32,
+                pointer: pointer.clone(),
+            },
+        )]));
+        self.statements(body);
+        self.scopes.pop();
+        if !self.terminated {
+            let current = self.temp();
+            self.instruction(format!("{current} = load i32, ptr {pointer}"));
+            let next = self.temp();
+            self.instruction(format!("{next} = add i32 {current}, 1"));
+            self.instruction(format!("store i32 {next}, ptr {pointer}"));
             self.terminate(format!("br label %{condition_label}"));
         }
 

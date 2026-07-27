@@ -16,7 +16,14 @@ struct Signature {
 #[derive(Clone)]
 struct Binding {
     ty: ValueType,
-    mutable: bool,
+    mutability: Mutability,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mutability {
+    Mutable,
+    Constant,
+    LoopVariable,
 }
 
 pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
@@ -511,6 +518,9 @@ fn resolve_block_types(
             StmtKind::While { body, .. } => {
                 resolve_block_types(body, evaluator, diagnostics);
             }
+            StmtKind::For { body, .. } => {
+                resolve_block_types(body, evaluator, diagnostics);
+            }
             StmtKind::Assign { .. } | StmtKind::Expr(_) | StmtKind::Return(_) => {}
         }
     }
@@ -608,6 +618,9 @@ fn validate_block_types(
                 }
             }
             StmtKind::While { body, .. } => {
+                validate_block_types(body, structs, diagnostics);
+            }
+            StmtKind::For { body, .. } => {
                 validate_block_types(body, structs, diagnostics);
             }
             StmtKind::Assign { .. } | StmtKind::Expr(_) | StmtKind::Return(_) => {}
@@ -809,7 +822,7 @@ fn check_function(
                 param.name.clone(),
                 Binding {
                     ty: param.ty.clone(),
-                    mutable: true,
+                    mutability: Mutability::Mutable,
                 },
             )
             .is_some()
@@ -847,7 +860,7 @@ struct FunctionChecker<'a> {
 #[derive(Clone)]
 struct Lvalue {
     ty: ValueType,
-    mutable: bool,
+    mutability: Mutability,
     root_name: String,
 }
 
@@ -915,7 +928,7 @@ impl<'a> FunctionChecker<'a> {
                         name.clone(),
                         Binding {
                             ty: ty.clone(),
-                            mutable: true,
+                            mutability: Mutability::Mutable,
                         },
                     )
                     .is_some()
@@ -935,7 +948,14 @@ impl<'a> FunctionChecker<'a> {
                 } else {
                     self.require_value(value, "compound assignment")
                 };
-                if !lvalue.mutable {
+                if lvalue.mutability == Mutability::LoopVariable {
+                    self.error(
+                        format!("loop variable `{}` is read-only", lvalue.root_name),
+                        statement.span,
+                    );
+                    return;
+                }
+                if lvalue.mutability == Mutability::Constant {
                     let direct_variable = matches!(target.kind, ExprKind::Variable(_));
                     let message = if *op == AssignOp::Set && direct_variable {
                         format!("cannot assign to constant `{}`", lvalue.root_name)
@@ -1015,6 +1035,41 @@ impl<'a> FunctionChecker<'a> {
             StmtKind::While { condition, body } => {
                 self.require_bool(condition, "`while` condition");
                 self.check_nested_block(body);
+            }
+            StmtKind::For {
+                name,
+                name_span,
+                lower,
+                upper,
+                body,
+            } => {
+                for (bound, description) in
+                    [(lower, "range lower bound"), (upper, "range upper bound")]
+                {
+                    if let Some(actual) = self.require_value(bound, description)
+                        && actual != ValueType::I32
+                    {
+                        self.error(
+                            format!("{description} must be `i32`, found `{}`", actual.name()),
+                            bound.span,
+                        );
+                    }
+                }
+                if builtins::predefined_constant(name).is_some() {
+                    self.error(
+                        format!("loop variable `{name}` conflicts with a predefined key constant"),
+                        *name_span,
+                    );
+                }
+                self.scopes.push(HashMap::from([(
+                    name.clone(),
+                    Binding {
+                        ty: ValueType::I32,
+                        mutability: Mutability::LoopVariable,
+                    },
+                )]));
+                self.check_statements(body);
+                self.scopes.pop();
             }
             StmtKind::Return(value) => match (self.return_type.clone(), value) {
                 (ReturnType::Void, None) => {}
@@ -1425,7 +1480,7 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Variable(name) => match self.binding(name) {
                 Some(binding) => Some(Lvalue {
                     ty: binding.ty,
-                    mutable: binding.mutable,
+                    mutability: binding.mutability,
                     root_name: name.clone(),
                 }),
                 None => {
@@ -1458,7 +1513,7 @@ impl<'a> FunctionChecker<'a> {
                 self.check_constant_index(index, length);
                 Some(Lvalue {
                     ty: element,
-                    mutable: root.mutable,
+                    mutability: root.mutability,
                     root_name: root.root_name,
                 })
             }
@@ -1492,7 +1547,7 @@ impl<'a> FunctionChecker<'a> {
                 };
                 Some(Lvalue {
                     ty: field.ty.clone(),
-                    mutable: root.mutable,
+                    mutability: root.mutability,
                     root_name: root.root_name,
                 })
             }
@@ -1555,16 +1610,16 @@ impl<'a> FunctionChecker<'a> {
             .rev()
             .find_map(|scope| scope.get(name).cloned())
             .or_else(|| {
-                self.globals
-                    .get(name)
-                    .cloned()
-                    .map(|ty| Binding { ty, mutable: true })
+                self.globals.get(name).cloned().map(|ty| Binding {
+                    ty,
+                    mutability: Mutability::Mutable,
+                })
             })
             .or_else(|| {
-                self.constants
-                    .get(name)
-                    .cloned()
-                    .map(|ty| Binding { ty, mutable: false })
+                self.constants.get(name).cloned().map(|ty| Binding {
+                    ty,
+                    mutability: Mutability::Constant,
+                })
             })
     }
 
