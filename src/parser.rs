@@ -344,6 +344,9 @@ impl Parser {
         if self.at(&TokenKind::While) {
             return self.while_statement();
         }
+        if self.at(&TokenKind::For) {
+            return self.for_statement();
+        }
         if self.at(&TokenKind::Return) {
             return self.return_statement();
         }
@@ -427,6 +430,26 @@ impl Parser {
         let (body, end) = self.block()?;
         Ok(Stmt {
             kind: StmtKind::While { condition, body },
+            span: start.merge(end),
+        })
+    }
+
+    fn for_statement(&mut self) -> Result<Stmt, Diagnostic> {
+        let start = self.expect(&TokenKind::For, "expected `for`")?.span;
+        let (name, name_span) = self.identifier("expected a loop variable after `for`")?;
+        self.expect(&TokenKind::In, "expected `in` after loop variable")?;
+        let lower = self.expression()?;
+        self.expect(&TokenKind::DotDot, "expected `..` between range bounds")?;
+        let upper = self.expression()?;
+        let (body, end) = self.block()?;
+        Ok(Stmt {
+            kind: StmtKind::For {
+                name,
+                name_span,
+                lower,
+                upper,
+                body,
+            },
             span: start.merge(end),
         })
     }
@@ -930,6 +953,30 @@ draw {}
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn parses_range_for_as_a_statement() {
+        let program = parse_source(
+            r#"game "Range"
+start {
+    for i in 1..4 {
+        print_i32(i)
+    }
+}
+update(dt: f32) {}
+draw {}
+"#,
+        );
+        let StmtKind::For {
+            name, lower, upper, ..
+        } = &program.functions[0].body[0].kind
+        else {
+            panic!("expected a range-based for statement");
+        };
+        assert_eq!(name, "i");
+        assert!(matches!(lower.kind, ExprKind::I32(1)));
+        assert!(matches!(upper.kind, ExprKind::I32(4)));
     }
 
     #[test]
