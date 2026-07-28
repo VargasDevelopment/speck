@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - name: Install native linker
+        run: sudo apt-get update && sudo apt-get install --yes lld
       - name: Install Rust tools
         run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
       - name: Select stable Rust

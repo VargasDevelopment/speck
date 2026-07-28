@@ -113,11 +113,12 @@ runtime `i32` division. Detailed measurements live in `docs/byte-budget.md`.
 ## Continuous integration contract
 
 `.github/workflows/ci.yml` runs formatting, clippy with warnings denied, and
-all targets on Ubuntu 24.04 x86-64. A macOS 15 ARM64 job runs the same checks and
-all non-window tests, including native compilation/linking, PPM and stream
-presenters, LLVM verification, and the Cocoa input harness. The single Cocoa
-window-launch test is compiled but skipped on hosted CI to avoid depending on
-an interactive display session.
+all targets on Ubuntu 24.04 x86-64 after installing Speck's required LLD native
+linker. A macOS 15 ARM64 job runs the same checks and all non-window tests,
+including native compilation/linking, PPM and stream presenters, LLVM
+verification, and the Cocoa input harness. The single Cocoa window-launch test
+is compiled but skipped on hosted CI to avoid depending on an interactive
+display session.
 
 The exact local Linux commands for each stacked revision are:
 
