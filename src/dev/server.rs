@@ -714,11 +714,7 @@ mod tests {
             "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
         )
         .expect("request should write");
-        let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
-            .expect("response should read");
-        response
+        read_response(&mut stream)
     }
 
     fn post(address: SocketAddr, path: &str, body: &[u8]) -> Vec<u8> {
@@ -730,10 +726,45 @@ mod tests {
         )
         .expect("request headers should write");
         stream.write_all(body).expect("request body should write");
+        read_response(&mut stream)
+    }
+
+    fn read_response(stream: &mut TcpStream) -> Vec<u8> {
         let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
-            .expect("response should read");
+        let mut buffer = [0_u8; 1024];
+        let body_start = loop {
+            if let Some(position) = response.windows(4).position(|window| window == b"\r\n\r\n") {
+                break position + 4;
+            }
+            let read = stream.read(&mut buffer).expect("response should read");
+            assert!(read > 0, "response headers should be complete");
+            response.extend_from_slice(&buffer[..read]);
+        };
+        let headers =
+            std::str::from_utf8(&response[..body_start]).expect("response headers should be UTF-8");
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("Content-Length").then(|| {
+                    value
+                        .trim()
+                        .parse::<usize>()
+                        .expect("content length should parse")
+                })
+            })
+            .expect("response should declare content length");
+        let response_length = body_start + content_length;
+        while response.len() < response_length {
+            let remaining = response_length - response.len();
+            let chunk = remaining.min(buffer.len());
+            let read = stream
+                .read(&mut buffer[..chunk])
+                .expect("response body should read");
+            assert!(read > 0, "response body should be complete");
+            response.extend_from_slice(&buffer[..read]);
+        }
+        response.truncate(response_length);
         response
     }
 
