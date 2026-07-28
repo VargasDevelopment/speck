@@ -397,6 +397,9 @@ fn handle_http(
     controls: &InputControl,
 ) -> Result<(), String> {
     stream
+        .set_nonblocking(false)
+        .map_err(|error| format!("could not configure HTTP connection blocking mode: {error}"))?;
+    stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(|error| format!("could not configure HTTP request timeout: {error}"))?;
     stream
@@ -702,6 +705,35 @@ mod tests {
                 .any(|window| window == b"X-Speck-Sequence: 9")
         );
         assert_eq!(&response[body_start..], pixels);
+
+        shutdown.store(true, Ordering::Release);
+        thread.join().expect("HTTP thread should stop");
+    }
+
+    #[test]
+    fn accepted_http_connections_wait_for_delayed_requests() {
+        let binding = bind_http(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, false)
+            .expect("HTTP listener should bind");
+        let address = binding.address;
+        let frames = FrameStore::default();
+        let controls = InputControl::default();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let (fatal_tx, _fatal_rx) = mpsc::channel();
+        let thread = spawn_http_server(
+            binding.listener,
+            frames,
+            controls,
+            shutdown.clone(),
+            fatal_tx,
+        );
+
+        let mut stream = TcpStream::connect(address).expect("test should connect");
+        thread::sleep(Duration::from_millis(50));
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .expect("delayed request should write");
+        let response = read_response(&mut stream);
+        assert!(response.starts_with(b"HTTP/1.1 200 OK"));
 
         shutdown.store(true, Ordering::Release);
         thread.join().expect("HTTP thread should stop");
