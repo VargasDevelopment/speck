@@ -289,9 +289,16 @@ runtime initialized.
 
 Arithmetic and ordering work on same-typed `i32` or `f32` operands. Equality
 works on matching numeric or Boolean operands. Conditions must be `bool`.
-`i32` division is signed integer division. Floating comparisons are ordered,
-so comparisons involving NaN are false; source floating literals must be
-finite.
+`i32` division is signed integer division. A runtime divisor of zero and the
+overflowing `-2147483648 / -1` case terminate through the narrow
+`crumb_division_fail(dividend, divisor)` runtime hook with a development
+diagnostic. The guard executes after both operands have been evaluated and
+before LLVM emits `sdiv`, so invalid division never reaches LLVM undefined
+behavior. This failure edge is deliberately isolated; it is not an exception
+system and may be replaced if Speck later gains one. Unary floating-point
+negation preserves the IEEE sign, including negative zero. Floating comparisons
+are ordered, so comparisons involving NaN are false; source floating literals
+must be finite.
 
 Boolean precedence, from lowest to highest, is `||`, `&&`, equality,
 comparison, arithmetic, unary, and primary expressions. Both operands of `&&`

@@ -147,6 +147,27 @@ otool -L build/moving_rectangle_native
 wc -c build/moving_rectangle_native
 ```
 
+## Reliability hardening measurement
+
+On the 2026-07-28 Linux x86-64 host, the checked-integer-division CRuMB hook
+contributes **59 bytes** of `.text` in the compiled runtime object, plus its two
+development-diagnostic strings and link metadata when referenced. A native
+test executable that evaluates a dynamic division-by-zero path measures **6,824
+bytes**. Link-section garbage collection removes the hook and both strings from
+programs with no runtime `i32` division; this was confirmed by a string audit of
+the 6,456-byte negative-zero regression executable.
+
+The guard also adds generated comparisons and branches at each runtime `i32`
+division site. It adds no allocation, object header, type metadata, or general
+exception runtime. The measurement was collected with:
+
+```sh
+nm -S --size-sort build/crumb_ppm_crumb.o
+wc -c build/division_zero
+size build/division_zero
+strings build/negative_zero | rg "integer division"
+```
+
 ## Keyboard-input slice delta
 
 The previous comparable `moving_rectangle_native` measurement was 53,400

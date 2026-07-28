@@ -116,6 +116,7 @@ pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String
         .expect("writing to a string cannot fail");
     }
     output.push_str("declare void @crumb_bounds_fail(i32, i32)\n");
+    output.push_str("declare void @crumb_division_fail(i32, i32)\n");
     output.push('\n');
 
     for declaration in &program.structs {
@@ -319,8 +320,7 @@ impl<'a> FunctionEmitter<'a> {
         match &statement.kind {
             StmtKind::Let { name, ty, init } => {
                 let value = self.expression_as(init, ty);
-                let pointer = self.temp();
-                self.instruction(format!("{pointer} = alloca {}", llvm_value_type(ty)));
+                let pointer = self.entry_alloca(&llvm_value_type(ty));
                 self.instruction(format!(
                     "store {} {}, ptr {pointer}",
                     llvm_value_type(ty),
@@ -471,8 +471,7 @@ impl<'a> FunctionEmitter<'a> {
     fn for_statement(&mut self, name: &str, lower: &Expr, upper: &Expr, body: &Block) {
         let lower = self.expression(lower);
         let upper = self.expression(upper);
-        let pointer = self.temp();
-        self.instruction(format!("{pointer} = alloca i32"));
+        let pointer = self.entry_alloca("i32");
         self.instruction(format!("store i32 {}, ptr {pointer}", lower.repr));
 
         let condition_label = self.label("for_condition");
@@ -774,7 +773,7 @@ impl<'a> FunctionEmitter<'a> {
                         format!("{temp} = sub i32 0, {}", operand.repr)
                     }
                     (UnaryOp::Negate, ValueType::F32) => {
-                        format!("{temp} = fsub float {}, {}", llvm_float(0.0), operand.repr)
+                        format!("{temp} = fneg float {}", operand.repr)
                     }
                     (UnaryOp::Not, ValueType::Bool) => {
                         format!("{temp} = xor i1 {}, true", operand.repr)
@@ -955,9 +954,12 @@ impl<'a> FunctionEmitter<'a> {
     }
 
     fn binary(&mut self, left: Value, op: BinaryOp, right: Value) -> Value {
-        let temp = self.temp();
         let left_type = left.value_type();
         let is_float = left_type == ValueType::F32;
+        if op == BinaryOp::Divide && !is_float {
+            return self.checked_i32_divide(left, right);
+        }
+        let temp = self.temp();
         let (instruction, result_type) = match op {
             BinaryOp::Add => (if is_float { "fadd" } else { "add" }, left_type.clone()),
             BinaryOp::Subtract => (if is_float { "fsub" } else { "sub" }, left_type.clone()),
@@ -998,6 +1000,49 @@ impl<'a> FunctionEmitter<'a> {
         Value {
             ty: result_type.into(),
             repr: temp,
+        }
+    }
+
+    fn checked_i32_divide(&mut self, left: Value, right: Value) -> Value {
+        let failure_label = self.label("division_failure");
+        let valid_label = self.label("division_valid");
+
+        let is_zero = self.temp();
+        self.instruction(format!("{is_zero} = icmp eq i32 {}, 0", right.repr));
+        let is_minimum = self.temp();
+        self.instruction(format!(
+            "{is_minimum} = icmp eq i32 {}, {}",
+            left.repr,
+            i32::MIN
+        ));
+        let is_negative_one = self.temp();
+        self.instruction(format!(
+            "{is_negative_one} = icmp eq i32 {}, -1",
+            right.repr
+        ));
+        let overflows = self.temp();
+        self.instruction(format!(
+            "{overflows} = and i1 {is_minimum}, {is_negative_one}"
+        ));
+        let invalid = self.temp();
+        self.instruction(format!("{invalid} = or i1 {is_zero}, {overflows}"));
+        self.terminate(format!(
+            "br i1 {invalid}, label %{failure_label}, label %{valid_label}"
+        ));
+
+        self.place_label(&failure_label);
+        self.instruction(format!(
+            "call void @crumb_division_fail(i32 {}, i32 {})",
+            left.repr, right.repr
+        ));
+        self.terminate("unreachable".into());
+
+        self.place_label(&valid_label);
+        let result = self.temp();
+        self.instruction(format!("{result} = sdiv i32 {}, {}", left.repr, right.repr));
+        Value {
+            ty: ValueType::I32.into(),
+            repr: result,
         }
     }
 
