@@ -77,6 +77,10 @@ file build/moving_rectangle_native
 otool -L build/moving_rectangle_native
 ```
 
+The bounded compiler/runtime reliability audit, its deterministic regression
+strategy, confirmed findings, and remaining policy questions are recorded in
+[`docs/reliability.md`](docs/reliability.md).
+
 The build command writes host-tagged, inspectable LLVM IR to
 `build/crumb_bum.ll`, validates it with a compatible `llvm-as` when available
 or with Clang otherwise, compiles it with Clang, and links it with

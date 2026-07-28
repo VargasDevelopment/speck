@@ -175,6 +175,27 @@ fn dynamic_and_negative_indices_fail_predictably_at_runtime() {
         )
         .expect("bounds source should be written");
         let executable = build_in(&work, &source);
+        let ir = fs::read_to_string(work.join("build").join(format!("{name}.ll")))
+            .expect("bounds LLVM should remain inspectable");
+        let failure = ir
+            .find("\nbounds_failure")
+            .expect("bounds failure block should exist");
+        let call = ir
+            .find("call void @crumb_bounds_fail")
+            .expect("bounds failure hook should be called");
+        let unreachable = ir[call..]
+            .find("unreachable")
+            .map(|offset| call + offset)
+            .expect("bounds failure should terminate control flow");
+        let valid = ir
+            .find("\nbounds_valid")
+            .expect("bounds valid block should exist");
+        let element_address = ir
+            .find("getelementptr inbounds [3 x i32]")
+            .expect("element address should exist on the valid path");
+        assert!(failure < call && call < unreachable && unreachable < valid);
+        assert!(valid < element_address);
+
         let run = Command::new(executable)
             .current_dir(&work)
             .output()
@@ -184,6 +205,7 @@ fn dynamic_and_negative_indices_fail_predictably_at_runtime() {
             String::from_utf8_lossy(&run.stderr),
             format!("Speck array index {index} is out of bounds for length 3\n")
         );
+        assert!(run.stdout.is_empty(), "failure must stop before the read");
     }
 }
 
