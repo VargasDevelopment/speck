@@ -78,6 +78,11 @@ Function parameters and returns carry the aggregate by value in the generated
 LLVM signature. No target size, alignment, or data layout is hard-coded; the
 host-selected Clang remains authoritative.
 
+Function-local storage, including hidden range-loop counters, is allocated in
+the function entry block. Initializer stores remain at their source execution
+point, preserving control-flow semantics while preventing repeated loop
+iterations from growing the native stack.
+
 Array and struct lowering is recursive rather than special-cased by aggregate
 shape. An array of structs is `[N x %spk_struct_Name]`; a fixed-array field is
 the same `[N x T]` value nested in the named record. Constant evaluation and
@@ -93,6 +98,14 @@ calls `crumb_bounds_fail(index, length)` and is unreachable afterward. The
 CRuMB helper is a 39-byte function in the audited Linux object plus its
 diagnostic string. Link-section garbage collection removes it from programs
 that never perform checked indexing.
+
+Every runtime `i32` division similarly checks for a zero divisor and the one
+signed overflow pair, `-2147483648 / -1`, before emitting `sdiv`. Invalid input
+branches to `crumb_division_fail(dividend, divisor)` and is unreachable after
+the call. Valid division uses the ordinary LLVM instruction. Keeping this as a
+narrow failure edge avoids LLVM poison today without committing the language to
+a generalized exception representation; a future exception design can replace
+the edge without changing valid arithmetic or expression syntax.
 
 `toolchain.rs` contains the deliberately small host abstraction. It recognizes
 only Linux x86-64 and macOS ARM64, and owns the object/executable suffixes,
@@ -118,10 +131,10 @@ build executes five deterministic 1/60-second frames without wall-clock pacing
 or host input. Browser development and native Cocoa builds are paced and
 unbounded by default, with the same private finite override for tests.
 
-The public ABI also contains the deliberately narrow array-bounds failure hook.
-It reports the invalid index and fixed length to standard error and terminates;
-it does not introduce an exception, allocator, generalized panic object, or
-runtime array metadata.
+The public ABI also contains deliberately narrow array-bounds and integer-
+division failure hooks. They report the invalid operands to standard error and
+terminate; they do not introduce an exception, allocator, generalized panic
+object, or runtime metadata.
 
 CRuMB's graphics path is split by responsibility:
 
