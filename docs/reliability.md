@@ -73,7 +73,7 @@ The severity labels used for this bounded pass are:
 - **P3:** diagnostic, documentation, or maintainability defect without wrong
   execution.
 
-No P0 issue was found. Three confirmed defects were fixed:
+No P0 issue was found. Four confirmed defects were fixed:
 
 1. **P1 — unchecked signed division.** Dynamic `i32` division could emit LLVM
    `sdiv` for a zero divisor or `-2147483648 / -1`, both invalid at the LLVM
@@ -87,6 +87,11 @@ No P0 issue was found. Three confirmed defects were fixed:
 3. **P2 — lost floating negative zero.** Unary `f32` negation used subtraction
    from positive zero, which maps positive zero back to positive zero. Lowering
    now uses LLVM `fneg`, preserving the IEEE sign bit.
+4. **P3 — platform-sensitive HTTP test completion.** Development-server tests
+   read responses until socket EOF even though responses declare an exact
+   `Content-Length`. macOS can report a connection reset at close after the
+   complete response has arrived. The test client now reads the declared
+   response length, matching the HTTP contract without weakening assertions.
 
 ## Failure-policy boundary
 
@@ -114,11 +119,11 @@ runtime `i32` division. Detailed measurements live in `docs/byte-budget.md`.
 
 `.github/workflows/ci.yml` runs formatting, clippy with warnings denied, and
 all targets on Ubuntu 24.04 x86-64 after installing Speck's required LLD native
-linker. A macOS 15 ARM64 job runs the same checks and all non-window tests,
-including native compilation/linking, PPM and stream presenters, LLVM
-verification, and the Cocoa input harness. The single Cocoa window-launch test
-is compiled but skipped on hosted CI to avoid depending on an interactive
-display session.
+linker and standalone LLVM verifier. A macOS 15 ARM64 job runs the same checks
+and all non-window tests, including native compilation/linking, PPM and stream
+presenters, LLVM verification, and the Cocoa input harness. The single Cocoa
+window-launch test is compiled but skipped on hosted CI to avoid depending on
+an interactive display session.
 
 The exact local Linux commands for each stacked revision are:
 
