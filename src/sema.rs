@@ -28,7 +28,7 @@ enum Mutability {
 
 pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
-    resolve_program_types(program, &mut diagnostics);
+    let invalid_length_constants = resolve_program_types(program, &mut diagnostics);
     let mut constants = builtins::CONSTANTS
         .iter()
         .map(|constant| (constant.name.to_owned(), constant.value.ty()))
@@ -130,7 +130,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         }
     }
 
-    let invalid_constants = program
+    let mut invalid_constants = program
         .constants
         .iter()
         .filter_map(|constant| {
@@ -146,17 +146,26 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
             }
         })
         .collect::<HashSet<_>>();
+    invalid_constants.extend(invalid_length_constants);
+    invalid_constants.extend(
+        program
+            .constants
+            .iter()
+            .filter(|constant| type_resolution_failed(&constant.ty, &structs))
+            .map(|constant| constant.name.clone()),
+    );
     let invalid_globals = program
         .globals
         .iter()
         .enumerate()
         .filter_map(|(index, global)| {
-            (!validate_compile_time_structure(
-                &global.init,
-                &globals,
-                "global initializers",
-                &mut diagnostics,
-            ))
+            (type_resolution_failed(&global.ty, &structs)
+                || !validate_compile_time_structure(
+                    &global.init,
+                    &globals,
+                    "global initializers",
+                    &mut diagnostics,
+                ))
             .then_some(index)
         })
         .collect::<HashSet<_>>();
@@ -221,6 +230,11 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         .map(|constant| (constant.name.to_owned(), constant.value.clone()))
         .collect::<HashMap<_, _>>();
     for constant in &program.constants {
+        if invalid_constants.contains(&constant.name)
+            || type_resolution_failed(&constant.ty, &structs)
+        {
+            continue;
+        }
         let mut checker = FunctionChecker::new(
             &globals,
             &constants,
@@ -246,7 +260,10 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         }
     }
 
-    for global in &program.globals {
+    for (index, global) in program.globals.iter().enumerate() {
+        if invalid_globals.contains(&index) {
+            continue;
+        }
         let mut checker = FunctionChecker::new(
             &globals,
             &constants,
@@ -294,7 +311,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         .map(|constant| constant.name.clone())
         .collect::<Vec<_>>();
     for name in constant_names {
-        if invalid_constants.contains(&name) {
+        if invalid_constants.contains(&name) || evaluator.failed(&name) {
             continue;
         }
         if let Err(error) = evaluator.evaluate_named(&name) {
@@ -343,6 +360,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         );
     }
 
+    deduplicate_diagnostics(&mut diagnostics);
     if diagnostics.is_empty() {
         Ok(())
     } else {
@@ -361,6 +379,7 @@ struct LengthConstantEvaluator {
     definitions: HashMap<String, LengthConstantDefinition>,
     structs: HashMap<String, StructDecl>,
     values: HashMap<String, ConstantValue>,
+    failures: HashMap<String, Diagnostic>,
     visiting: Vec<String>,
 }
 
@@ -390,6 +409,7 @@ impl LengthConstantEvaluator {
                 .iter()
                 .map(|constant| (constant.name.to_owned(), constant.value.clone()))
                 .collect(),
+            failures: HashMap::new(),
             visiting: Vec::new(),
         }
     }
@@ -422,6 +442,9 @@ impl LengthConstantEvaluator {
         if let Some(value) = self.values.get(name) {
             return Ok(value.clone());
         }
+        if let Some(diagnostic) = self.failures.get(name) {
+            return Err(diagnostic.clone());
+        }
         let Some(definition) = self.definitions.get(name).cloned() else {
             return Err(Diagnostic::new(
                 format!("unknown array-length constant `{name}`"),
@@ -438,24 +461,35 @@ impl LengthConstantEvaluator {
         }
 
         self.visiting.push(name.to_owned());
+        let result = self.evaluate_definition(name, &definition);
+        let popped = self.visiting.pop();
+        debug_assert_eq!(popped.as_deref(), Some(name));
+        let value = match result {
+            Ok(value) => value,
+            Err(diagnostic) => {
+                self.failures.insert(name.to_owned(), diagnostic.clone());
+                return Err(diagnostic);
+            }
+        };
+        self.values.insert(name.to_owned(), value.clone());
+        Ok(value)
+    }
+
+    fn evaluate_definition(
+        &mut self,
+        name: &str,
+        definition: &LengthConstantDefinition,
+    ) -> Result<ConstantValue, Diagnostic> {
         let mut ty = definition.ty.clone();
         let mut diagnostics = Vec::new();
         resolve_value_type(&mut ty, self, &mut diagnostics);
-        let mut structs = self.structs.clone();
-        for declaration in structs.values_mut() {
-            for field in &mut declaration.fields {
-                resolve_value_type(&mut field.ty, self, &mut diagnostics);
-            }
+        let structs = self.resolve_structs_for_type(&ty, &mut diagnostics);
+        if let Some(diagnostic) = diagnostics.into_iter().next() {
+            return Err(diagnostic);
         }
-        let result = if let Some(diagnostic) = diagnostics.into_iter().next() {
-            Err(diagnostic)
-        } else {
-            evaluate_typed_expression(&definition.init, &ty, &structs, |dependency| {
-                self.evaluate_value(dependency, definition.init.span)
-            })
-        };
-        self.visiting.pop();
-        let value = result?;
+        let value = evaluate_typed_expression(&definition.init, &ty, &structs, |dependency| {
+            self.evaluate_value(dependency, definition.init.span)
+        })?;
         if value.ty() != ty {
             return Err(Diagnostic::new(
                 format!(
@@ -466,12 +500,74 @@ impl LengthConstantEvaluator {
                 definition.init.span,
             ));
         }
-        self.values.insert(name.to_owned(), value.clone());
         Ok(value)
+    }
+
+    fn resolve_structs_for_type(
+        &mut self,
+        ty: &ValueType,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> HashMap<String, StructDecl> {
+        let mut structs = self.structs.clone();
+        let mut resolving = HashSet::new();
+        let mut resolved = HashSet::new();
+        self.resolve_structs_referenced_by(
+            ty,
+            &mut structs,
+            &mut resolving,
+            &mut resolved,
+            diagnostics,
+        );
+        structs
+    }
+
+    fn resolve_structs_referenced_by(
+        &mut self,
+        ty: &ValueType,
+        structs: &mut HashMap<String, StructDecl>,
+        resolving: &mut HashSet<String>,
+        resolved: &mut HashSet<String>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        match ty {
+            ValueType::Struct(name) => {
+                if resolved.contains(name) || !resolving.insert(name.clone()) {
+                    return;
+                }
+                let Some(mut declaration) = structs.get(name).cloned() else {
+                    resolving.remove(name);
+                    return;
+                };
+                for field in &mut declaration.fields {
+                    resolve_value_type(&mut field.ty, self, diagnostics);
+                    self.resolve_structs_referenced_by(
+                        &field.ty,
+                        structs,
+                        resolving,
+                        resolved,
+                        diagnostics,
+                    );
+                }
+                structs.insert(name.clone(), declaration);
+                resolving.remove(name);
+                resolved.insert(name.clone());
+            }
+            ValueType::Array { element, .. } => self.resolve_structs_referenced_by(
+                element,
+                structs,
+                resolving,
+                resolved,
+                diagnostics,
+            ),
+            ValueType::I32 | ValueType::F32 | ValueType::Bool => {}
+        }
     }
 }
 
-fn resolve_program_types(program: &mut Program, diagnostics: &mut Vec<Diagnostic>) {
+fn resolve_program_types(
+    program: &mut Program,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> HashSet<String> {
     let snapshot = program.clone();
     let mut evaluator = LengthConstantEvaluator::new(&snapshot);
 
@@ -495,6 +591,7 @@ fn resolve_program_types(program: &mut Program, diagnostics: &mut Vec<Diagnostic
         }
         resolve_block_types(&mut function.body, &mut evaluator, diagnostics);
     }
+    evaluator.failures.into_keys().collect()
 }
 
 fn resolve_block_types(
@@ -544,14 +641,26 @@ fn resolve_value_type(
             .and_then(|value| positive_array_length(i64::from(value), span))
             .map(ArrayLength::Resolved),
         ArrayLength::Resolved(value) => Ok(ArrayLength::Resolved(value)),
+        ArrayLength::Invalid => Ok(ArrayLength::Invalid),
     };
     match result {
         Ok(resolved) => *length = resolved,
         Err(diagnostic) => {
-            diagnostics.push(diagnostic);
-            *length = ArrayLength::Resolved(1);
+            push_unique_diagnostic(diagnostics, diagnostic);
+            *length = ArrayLength::Invalid;
         }
     }
+}
+
+fn push_unique_diagnostic(diagnostics: &mut Vec<Diagnostic>, diagnostic: Diagnostic) {
+    if !diagnostics.contains(&diagnostic) {
+        diagnostics.push(diagnostic);
+    }
+}
+
+fn deduplicate_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
+    let mut seen = HashSet::new();
+    diagnostics.retain(|diagnostic| seen.insert((diagnostic.message.clone(), diagnostic.span)));
 }
 
 fn positive_array_length(value: i64, span: Span) -> Result<usize, Diagnostic> {
@@ -568,6 +677,36 @@ fn positive_array_length(value: i64, span: Span) -> Result<usize, Diagnostic> {
         ));
     }
     usize::try_from(value).map_err(|_| Diagnostic::new("array length is too large", span))
+}
+
+fn type_resolution_failed(ty: &ValueType, structs: &HashMap<String, StructDecl>) -> bool {
+    fn visit(
+        ty: &ValueType,
+        structs: &HashMap<String, StructDecl>,
+        visiting: &mut HashSet<String>,
+    ) -> bool {
+        match ty {
+            ValueType::Array { element, length } => {
+                matches!(length, ArrayLength::Invalid) || visit(element, structs, visiting)
+            }
+            ValueType::Struct(name) => {
+                if !visiting.insert(name.clone()) {
+                    return false;
+                }
+                let failed = structs.get(name).is_some_and(|declaration| {
+                    declaration
+                        .fields
+                        .iter()
+                        .any(|field| visit(&field.ty, structs, visiting))
+                });
+                visiting.remove(name);
+                failed
+            }
+            ValueType::I32 | ValueType::F32 | ValueType::Bool => false,
+        }
+    }
+
+    visit(ty, structs, &mut HashSet::new())
 }
 
 fn validate_declared_types(
@@ -1327,6 +1466,9 @@ impl<'a> FunctionChecker<'a> {
         expected: &ValueType,
         description: &str,
     ) -> Option<ValueType> {
+        if expected.has_invalid_array_length() {
+            return Some(expected.clone());
+        }
         if let ExprKind::ArrayLiteral(elements) = &expression.kind {
             let Some((element_type, length)) = expected.resolved_array() else {
                 self.error(
@@ -1376,6 +1518,9 @@ impl<'a> FunctionChecker<'a> {
                 format!("array index must be i32, found `{}`", index_type.name()),
                 index.span,
             );
+        }
+        if base_type.has_invalid_array_length() {
+            return None;
         }
         let Some((element, length)) = base_type.resolved_array() else {
             self.error(
@@ -1501,6 +1646,9 @@ impl<'a> FunctionChecker<'a> {
                         format!("array index must be i32, found `{}`", index_type.name()),
                         index.span,
                     );
+                }
+                if root.ty.has_invalid_array_length() {
+                    return None;
                 }
                 let Some((element, length)) = root.ty.resolved_array() else {
                     self.error(
@@ -1671,6 +1819,10 @@ impl<'a> ConstantEvaluator<'a> {
                 .collect(),
             stack: Vec::new(),
         }
+    }
+
+    fn failed(&self, name: &str) -> bool {
+        matches!(self.states.get(name), Some(VisitState::Failed))
     }
 
     fn evaluate_named(&mut self, name: &str) -> Result<ConstantValue, Diagnostic> {

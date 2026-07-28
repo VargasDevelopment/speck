@@ -38,6 +38,15 @@ impl ValueType {
             _ => None,
         }
     }
+
+    pub fn has_invalid_array_length(&self) -> bool {
+        match self {
+            Self::Array { element, length } => {
+                matches!(length, ArrayLength::Invalid) || element.has_invalid_array_length()
+            }
+            Self::I32 | Self::F32 | Self::Bool | Self::Struct(_) => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -45,13 +54,14 @@ pub enum ArrayLength {
     Literal { value: i64, span: Span },
     Constant { name: String, span: Span },
     Resolved(usize),
+    Invalid,
 }
 
 impl ArrayLength {
     pub fn span(&self) -> Option<Span> {
         match self {
             Self::Literal { span, .. } | Self::Constant { span, .. } => Some(*span),
-            Self::Resolved(_) => None,
+            Self::Resolved(_) | Self::Invalid => None,
         }
     }
 
@@ -60,6 +70,7 @@ impl ArrayLength {
             Self::Literal { value, .. } => value.to_string(),
             Self::Constant { name, .. } => name.clone(),
             Self::Resolved(value) => value.to_string(),
+            Self::Invalid => "<invalid>".into(),
         }
     }
 }
