@@ -57,7 +57,7 @@ fn speck_program_writes_expected_ppm_framebuffer() {
 
     let ppm = fs::read(test_root.join("build/frame.ppm")).expect("frame.ppm should be written");
     let mut expected_pixels = vec![0_u8; WIDTH * HEIGHT * CHANNELS];
-    for pixel in expected_pixels.chunks_exact_mut(CHANNELS) {
+    for pixel in expected_pixels.as_chunks_mut::<CHANNELS>().0 {
         pixel.copy_from_slice(&[10, 20, 30]);
     }
     for y in 8..18 {
