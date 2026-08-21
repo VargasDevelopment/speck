@@ -297,7 +297,7 @@ overflowing `-2147483648 / -1` case terminate through the narrow
 `crumb_division_fail(dividend, divisor)` runtime hook with a development
 diagnostic; the same two cases for `%` terminate through the parallel
 `crumb_remainder_fail(dividend, divisor)` hook. The guard executes after both operands have been evaluated and
-before LLVM emits `sdiv`, so invalid division never reaches LLVM undefined
+before LLVM emits `sdiv` or `srem`, so invalid division never reaches LLVM undefined
 behavior. This failure edge is deliberately isolated; it is not an exception
 system and may be replaced if Speck later gains one. Unary floating-point
 negation preserves the IEEE sign, including negative zero. Floating comparisons

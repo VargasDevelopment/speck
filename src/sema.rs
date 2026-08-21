@@ -1114,14 +1114,24 @@ impl<'a> FunctionChecker<'a> {
                     self.error(message, statement.span);
                     return;
                 }
-                if *op != AssignOp::Set && !lvalue.ty.is_numeric() {
-                    self.error(
-                        format!(
-                            "compound assignment requires a numeric target, but found `{}`",
-                            lvalue.ty.name()
-                        ),
-                        statement.span,
-                    );
+                if *op != AssignOp::Set {
+                    if !lvalue.ty.is_numeric() {
+                        self.error(
+                            format!(
+                                "compound assignment requires a numeric target, but found `{}`",
+                                lvalue.ty.name()
+                            ),
+                            statement.span,
+                        );
+                    } else if *op == AssignOp::Remainder && lvalue.ty != ValueType::I32 {
+                        self.error(
+                            format!(
+                                "remainder requires `i32` operands, but found `{}`",
+                                lvalue.ty.name()
+                            ),
+                            statement.span,
+                        );
+                    }
                 }
                 if let Some(actual) = actual
                     && lvalue.ty != actual

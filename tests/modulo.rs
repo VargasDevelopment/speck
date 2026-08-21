@@ -117,12 +117,34 @@ draw {}
         "remainder requires `i32` operands, found `f32`",
     );
     assert_error(
+        r#"game "Float Compound Remainder"
+let value: f32 = 7.5
+start { value %= 2.0 }
+update(dt: f32) {}
+draw {}
+"#,
+        "remainder requires `i32` operands, but found `f32`",
+    );
+    assert_error(
         r#"game "Bool Modulo"
 start { let result: i32 = true % false }
 update(dt: f32) {}
 draw {}
 "#,
         "remainder requires `i32` operands, found `bool`",
+    );
+}
+
+#[test]
+fn immutable_roots_reject_remainder_assignment() {
+    assert_error(
+        r#"game "Const Remainder"
+const C: i32 = 5
+start { C %= 2 }
+update(dt: f32) {}
+draw {}
+"#,
+        "cannot use compound assignment on constant `C`",
     );
 }
 
