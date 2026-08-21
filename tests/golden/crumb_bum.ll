@@ -11,6 +11,7 @@ declare i1 @crumb_key_released(i32)
 declare void @crumb_request_quit()
 declare void @crumb_bounds_fail(i32, i32)
 declare void @crumb_division_fail(i32, i32)
+declare void @crumb_remainder_fail(i32, i32)
 
 @spk_global_x = internal global float 0x4024000000000000
 @spk_global_velocity = internal global float 0x409C200000000000

@@ -124,13 +124,21 @@ void crumb_bounds_fail(int index, int length) {
     exit(EXIT_FAILURE);
 }
 
-void crumb_division_fail(int dividend, int divisor) {
+static void crumb_integer_fail(const char *operation, const char *symbol, int dividend, int divisor) {
     if (divisor == 0) {
-        fprintf(stderr, "Speck integer division by zero: %d / 0\n", dividend);
+        fprintf(stderr, "Speck integer %s by zero: %d %s 0\n", operation, dividend, symbol);
     } else {
-        fprintf(stderr, "Speck integer division overflow: %d / %d\n", dividend, divisor);
+        fprintf(stderr, "Speck integer %s overflow: %d %s %d\n", operation, dividend, symbol, divisor);
     }
     exit(EXIT_FAILURE);
+}
+
+void crumb_division_fail(int dividend, int divisor) {
+    crumb_integer_fail("division", "/", dividend, divisor);
+}
+
+void crumb_remainder_fail(int dividend, int divisor) {
+    crumb_integer_fail("remainder", "%", dividend, divisor);
 }
 
 void crumb_shutdown(void) {

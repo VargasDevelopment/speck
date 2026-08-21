@@ -51,6 +51,8 @@ pub enum TokenKind {
     StarEqual,
     Slash,
     SlashEqual,
+    Percent,
+    PercentEqual,
     Bang,
     Equal,
     EqualEqual,
@@ -115,6 +117,8 @@ impl<'a> Lexer<'a> {
                 b'/' if self.take(b'/') => self.line_comment(),
                 b'/' if self.take(b'=') => self.push(TokenKind::SlashEqual, start),
                 b'/' => self.simple(TokenKind::Slash, start),
+                b'%' if self.take(b'=') => self.push(TokenKind::PercentEqual, start),
+                b'%' => self.simple(TokenKind::Percent, start),
                 b'!' if self.take(b'=') => self.push(TokenKind::BangEqual, start),
                 b'!' => self.simple(TokenKind::Bang, start),
                 b'=' if self.take(b'=') => self.push(TokenKind::EqualEqual, start),
@@ -319,8 +323,8 @@ mod tests {
 
     #[test]
     fn lexes_longest_match_operators() {
-        let tokens =
-            lex("+= -= *= /= <= >= == != && || -> .. . + - * /").expect("operators should lex");
+        let tokens = lex("+= -= *= /= %= <= >= == != && || -> .. . + - * / %")
+            .expect("operators should lex");
         let kinds = tokens
             .into_iter()
             .map(|token| token.kind)
@@ -332,6 +336,7 @@ mod tests {
                 TokenKind::MinusEqual,
                 TokenKind::StarEqual,
                 TokenKind::SlashEqual,
+                TokenKind::PercentEqual,
                 TokenKind::LessEqual,
                 TokenKind::GreaterEqual,
                 TokenKind::EqualEqual,
@@ -345,6 +350,7 @@ mod tests {
                 TokenKind::Minus,
                 TokenKind::Star,
                 TokenKind::Slash,
+                TokenKind::Percent,
                 TokenKind::Eof,
             ]
         );
