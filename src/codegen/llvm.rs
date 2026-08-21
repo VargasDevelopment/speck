@@ -117,6 +117,7 @@ pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String
     }
     output.push_str("declare void @crumb_bounds_fail(i32, i32)\n");
     output.push_str("declare void @crumb_division_fail(i32, i32)\n");
+    output.push_str("declare void @crumb_remainder_fail(i32, i32)\n");
     output.push('\n');
 
     for declaration in &program.structs {
@@ -360,6 +361,7 @@ impl<'a> FunctionEmitter<'a> {
                         AssignOp::Subtract => BinaryOp::Subtract,
                         AssignOp::Multiply => BinaryOp::Multiply,
                         AssignOp::Divide => BinaryOp::Divide,
+                        AssignOp::Remainder => BinaryOp::Remainder,
                         AssignOp::Set => unreachable!(),
                     };
                     self.binary(left, binary_op, right)
@@ -956,8 +958,8 @@ impl<'a> FunctionEmitter<'a> {
     fn binary(&mut self, left: Value, op: BinaryOp, right: Value) -> Value {
         let left_type = left.value_type();
         let is_float = left_type == ValueType::F32;
-        if op == BinaryOp::Divide && !is_float {
-            return self.checked_i32_divide(left, right);
+        if matches!(op, BinaryOp::Divide | BinaryOp::Remainder) && !is_float {
+            return self.checked_i32_division(left, op, right);
         }
         let temp = self.temp();
         let (instruction, result_type) = match op {
@@ -990,6 +992,7 @@ impl<'a> FunctionEmitter<'a> {
                 ValueType::Bool,
             ),
             BinaryOp::LogicalAnd | BinaryOp::LogicalOr => unreachable!(),
+            BinaryOp::Remainder => unreachable!("remainder requires checked i32 lowering"),
         };
         self.instruction(format!(
             "{temp} = {instruction} {} {}, {}",
@@ -1003,9 +1006,14 @@ impl<'a> FunctionEmitter<'a> {
         }
     }
 
-    fn checked_i32_divide(&mut self, left: Value, right: Value) -> Value {
-        let failure_label = self.label("division_failure");
-        let valid_label = self.label("division_valid");
+    fn checked_i32_division(&mut self, left: Value, op: BinaryOp, right: Value) -> Value {
+        let (mnemonic, fail_hook, stage) = match op {
+            BinaryOp::Divide => ("sdiv", "crumb_division_fail", "division"),
+            BinaryOp::Remainder => ("srem", "crumb_remainder_fail", "remainder"),
+            _ => unreachable!("only integer division and remainder are checked"),
+        };
+        let failure_label = self.label(&format!("{stage}_failure"));
+        let valid_label = self.label(&format!("{stage}_valid"));
 
         let is_zero = self.temp();
         self.instruction(format!("{is_zero} = icmp eq i32 {}, 0", right.repr));
@@ -1032,14 +1040,17 @@ impl<'a> FunctionEmitter<'a> {
 
         self.place_label(&failure_label);
         self.instruction(format!(
-            "call void @crumb_division_fail(i32 {}, i32 {})",
+            "call void @{fail_hook}(i32 {}, i32 {})",
             left.repr, right.repr
         ));
         self.terminate("unreachable".into());
 
         self.place_label(&valid_label);
         let result = self.temp();
-        self.instruction(format!("{result} = sdiv i32 {}, {}", left.repr, right.repr));
+        self.instruction(format!(
+            "{result} = {mnemonic} i32 {}, {}",
+            left.repr, right.repr
+        ));
         Value {
             ty: ValueType::I32.into(),
             repr: result,

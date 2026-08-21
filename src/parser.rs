@@ -389,6 +389,7 @@ impl Parser {
             TokenKind::MinusEqual => AssignOp::Subtract,
             TokenKind::StarEqual => AssignOp::Multiply,
             TokenKind::SlashEqual => AssignOp::Divide,
+            TokenKind::PercentEqual => AssignOp::Remainder,
             _ => {
                 return Err(Diagnostic::new(
                     "expected an assignment operator",
@@ -553,6 +554,8 @@ impl Parser {
                 Some(BinaryOp::Multiply)
             } else if self.take(&TokenKind::Slash) {
                 Some(BinaryOp::Divide)
+            } else if self.take(&TokenKind::Percent) {
+                Some(BinaryOp::Remainder)
             } else {
                 None
             };
@@ -811,6 +814,7 @@ impl Parser {
                 | TokenKind::MinusEqual
                 | TokenKind::StarEqual
                 | TokenKind::SlashEqual
+                | TokenKind::PercentEqual
         )
     }
 
@@ -993,7 +997,7 @@ draw {}
 const LIMIT: i32 = 10
 let x: f32 = f32(LIMIT)
 fn effect() -> void { return }
-start { x += 1.0 x -= 1.0 x *= 2.0 x /= 2.0 effect() }
+start { x += 1.0 x -= 1.0 x *= 2.0 x /= 2.0 x %= 2.0 effect() }
 update(dt: f32) {}
 draw {}
 "#,
@@ -1022,6 +1026,7 @@ draw {}
                 AssignOp::Subtract,
                 AssignOp::Multiply,
                 AssignOp::Divide,
+                AssignOp::Remainder,
             ]
         );
     }

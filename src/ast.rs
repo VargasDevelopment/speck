@@ -302,6 +302,7 @@ pub enum AssignOp {
     Subtract,
     Multiply,
     Divide,
+    Remainder,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -316,6 +317,7 @@ pub enum BinaryOp {
     Subtract,
     Multiply,
     Divide,
+    Remainder,
     Equal,
     NotEqual,
     Less,

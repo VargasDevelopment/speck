@@ -14,6 +14,14 @@ feature as an automatic requirement.
 - Named dimensions, speeds, and flags can use immutable top-level constants.
 - Boolean conditions compose with short-circuiting `&&` and `||`.
 
+## Resolved in the modulo slice
+
+- Platformer sketches needed wrap and grid math, and the playground friction
+  log recorded "There's no modulo??". Statement-level `%` on `i32` operands,
+  plus `%=` compound assignment, now covers it. `%` shares division's
+  compile-time constant checks and runtime zero/overflow guard, and remains
+  rejected for `f32` until a real sketch demands floating remainder.
+
 ## Partially addressed, still under evaluation
 
 - `i32` and `f32` are precise and make conversion points clear, but we still

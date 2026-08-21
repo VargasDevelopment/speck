@@ -40,7 +40,7 @@ logical_and   = equality ("&&" equality)* ;
 equality      = comparison (("==" | "!=") comparison)* ;
 comparison    = term (("<" | "<=" | ">" | ">=") term)* ;
 term          = factor (("+" | "-") factor)* ;
-factor        = unary (("*" | "/") unary)* ;
+factor        = unary (("*" | "/" | "%") unary)* ;
 unary         = ("-" | "!") unary | postfix ;
 postfix       = primary (("[" expression "]") | ("." identifier))* ;
 primary       = integer | float | "true" | "false"
@@ -55,7 +55,7 @@ field_initializer = identifier ":" expression ","? ;
 
 `i32(...)` and `f32(...)` are conversion expressions, not function calls.
 Their type names are reserved only where the grammar already expects a type or
-conversion. The lexer uses longest-match rules for `+=`, `-=`, `*=`, `/=`,
+conversion. The lexer uses longest-match rules for `+=`, `-=`, `*=`, `/=`, `%=`,
 `<=`, `>=`, `==`, `!=`, `&&`, `||`, `->`, and `..`.
 
 ## Types and functions
@@ -270,7 +270,7 @@ Constant expressions support numeric and Boolean literals, unary `-` and `!`,
 other constants, arithmetic, comparisons, equality, `&&`, `||`, parentheses,
 and explicit numeric conversions. They cannot call functions, reference
 mutable globals or runtime values, or use `void`. Integer arithmetic is checked
-for overflow. Non-finite floating results, division by zero, and invalid
+for overflow. Non-finite floating results, division or remainder by zero, and invalid
 conversions are diagnosed at the initializer.
 
 Dependencies are evaluated after all constant names have been collected.
@@ -287,13 +287,17 @@ runtime initialized.
 
 ## Operators and mutation
 
-Arithmetic and ordering work on same-typed `i32` or `f32` operands. Equality
+Arithmetic and ordering work on same-typed `i32` or `f32` operands, except
+that `%` (remainder) requires `i32`. Equality
 works on matching numeric or Boolean operands. Conditions must be `bool`.
-`i32` division is signed integer division. A runtime divisor of zero and the
+`i32` division is signed integer division with truncation toward zero, and
+`i32` remainder takes the sign of the dividend, so `-7 % 3` is `-1` and
+`7 % -3` is `1`. A runtime divisor of zero and the
 overflowing `-2147483648 / -1` case terminate through the narrow
 `crumb_division_fail(dividend, divisor)` runtime hook with a development
-diagnostic. The guard executes after both operands have been evaluated and
-before LLVM emits `sdiv`, so invalid division never reaches LLVM undefined
+diagnostic; the same two cases for `%` terminate through the parallel
+`crumb_remainder_fail(dividend, divisor)` hook. The guard executes after both operands have been evaluated and
+before LLVM emits `sdiv` or `srem`, so invalid division never reaches LLVM undefined
 behavior. This failure edge is deliberately isolated; it is not an exception
 system and may be replaced if Speck later gains one. Unary floating-point
 negation preserves the IEEE sign, including negative zero. Floating comparisons
@@ -307,7 +311,7 @@ and `||` must be `bool`. Evaluation short-circuits: `left && right` skips
 true. LLVM emits branches and a merged Boolean result rather than eager bitwise
 operations.
 
-`+=`, `-=`, `*=`, and `/=` are statement-only shorthand for numeric mutation:
+`+=`, `-=`, `*=`, `/=`, and `%=` are statement-only shorthand for numeric mutation:
 
 ```text
 x += velocity * dt

@@ -1114,14 +1114,24 @@ impl<'a> FunctionChecker<'a> {
                     self.error(message, statement.span);
                     return;
                 }
-                if *op != AssignOp::Set && !lvalue.ty.is_numeric() {
-                    self.error(
-                        format!(
-                            "compound assignment requires a numeric target, but found `{}`",
-                            lvalue.ty.name()
-                        ),
-                        statement.span,
-                    );
+                if *op != AssignOp::Set {
+                    if !lvalue.ty.is_numeric() {
+                        self.error(
+                            format!(
+                                "compound assignment requires a numeric target, but found `{}`",
+                                lvalue.ty.name()
+                            ),
+                            statement.span,
+                        );
+                    } else if *op == AssignOp::Remainder && lvalue.ty != ValueType::I32 {
+                        self.error(
+                            format!(
+                                "remainder requires `i32` operands, but found `{}`",
+                                lvalue.ty.name()
+                            ),
+                            statement.span,
+                        );
+                    }
                 }
                 if let Some(actual) = actual
                     && lvalue.ty != actual
@@ -1346,6 +1356,20 @@ impl<'a> FunctionChecker<'a> {
                         } else {
                             self.error(
                                 "arithmetic requires `i32` or `f32` operands",
+                                expression.span,
+                            );
+                            None
+                        }
+                    }
+                    BinaryOp::Remainder => {
+                        if left_type == ValueType::I32 {
+                            Some(left_type.into())
+                        } else {
+                            self.error(
+                                format!(
+                                    "remainder requires `i32` operands, found `{}`",
+                                    left_type.name()
+                                ),
                                 expression.span,
                             );
                             None
@@ -2306,6 +2330,11 @@ fn evaluate_binary(
                 .checked_div(right)
                 .map(ConstantValue::I32)
                 .ok_or("constant-expression overflow"),
+            BinaryOp::Remainder if right == 0 => Err("remainder by zero in constant expression"),
+            BinaryOp::Remainder => left
+                .checked_rem(right)
+                .map(ConstantValue::I32)
+                .ok_or("constant-expression overflow"),
             BinaryOp::Equal => Ok(ConstantValue::Bool(left == right)),
             BinaryOp::NotEqual => Ok(ConstantValue::Bool(left != right)),
             BinaryOp::Less => Ok(ConstantValue::Bool(left < right)),
@@ -2315,6 +2344,7 @@ fn evaluate_binary(
             BinaryOp::LogicalAnd | BinaryOp::LogicalOr => Err("Boolean operator requires `bool`"),
         },
         (ConstantValue::F32(left), ConstantValue::F32(right)) => match op {
+            BinaryOp::Remainder => Err("remainder requires `i32` operands"),
             BinaryOp::Divide if right == 0.0 => Err("division by zero in constant expression"),
             BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {
                 let result = match op {
