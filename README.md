@@ -146,3 +146,12 @@ See [the language reference](docs/language.md),
 [language friction log](docs/friction-log.md),
 [architecture](docs/architecture.md), [byte budget](docs/byte-budget.md), and
 [roadmap](docs/roadmap.md).
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+development checks and project guidelines.
+
+## License
+
+Speck is available under the [MIT License](LICENSE).
