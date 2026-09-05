@@ -1733,12 +1733,15 @@ impl<'a> FunctionChecker<'a> {
 
     fn check_constant_index(&mut self, index: &Expr, length: usize) {
         let result = evaluate_expression(index, |name| {
-            self.constant_values.get(name).cloned().ok_or_else(|| {
-                Diagnostic::new(
-                    format!("`{name}` is not a compile-time constant"),
-                    index.span,
-                )
-            })
+            self.binding(name)
+                .filter(|binding| binding.mutability == Mutability::Constant)
+                .and_then(|_| self.constant_values.get(name).cloned())
+                .ok_or_else(|| {
+                    Diagnostic::new(
+                        format!("`{name}` is not a compile-time constant"),
+                        index.span,
+                    )
+                })
         });
         let Ok(ConstantValue::I32(value)) = result else {
             return;
