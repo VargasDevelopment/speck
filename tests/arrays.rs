@@ -91,6 +91,78 @@ fn aggregate_equality_is_rejected_before_llvm_lowering() {
 }
 
 #[test]
+fn shadowed_constant_indices_follow_lexical_bindings() {
+    let cases = [
+        ("local", "", "let INDEX: i32 = 0 print_i32(values[INDEX])"),
+        (
+            "parameter",
+            "fn read(INDEX: i32) -> i32 { return values[INDEX] }",
+            "print_i32(read(0))",
+        ),
+        (
+            "loop variable",
+            "",
+            "for INDEX in 0..2 { values[INDEX] += 1 }",
+        ),
+        (
+            "nested local",
+            "",
+            "let INDEX: i32 = 0 if true { let INDEX: i32 = 1 values[INDEX] = 7 } print_i32(values[INDEX])",
+        ),
+        (
+            "expression",
+            "",
+            "let INDEX: i32 = 0 print_i32(values[INDEX + 1])",
+        ),
+        (
+            "array binding",
+            "",
+            "let INDICES: [i32; 1] = [0] print_i32(values[INDICES[0]])",
+        ),
+        (
+            "struct binding",
+            "",
+            "let POSITION: Position = Position { index: 0 } print_i32(values[POSITION.index])",
+        ),
+    ];
+    for (name, functions, body) in cases {
+        let source = format!(
+            "game \"Shadowed indices\"\n\
+             struct Position {{ index: i32 }}\n\
+             const INDEX: i32 = 9\n\
+             const INDICES: [i32; 1] = [9]\n\
+             const POSITION: Position = Position {{ index: 9 }}\n\
+             let values: [i32; 2] = [10, 20]\n\
+             {functions}\n\
+             start {{ {body} }}\nupdate(dt: f32) {{}}\ndraw {{}}\n"
+        );
+        speck::analyze(&source)
+            .unwrap_or_else(|errors| panic!("{name} shadowing should be accepted: {errors:#?}"));
+    }
+}
+
+#[test]
+fn constant_indices_are_checked_outside_shadowing_scopes() {
+    for body in [
+        "print_i32(values[INDEX])",
+        "let INDEX: i32 = values[INDEX]",
+        "if true { let INDEX: i32 = 0 } print_i32(values[INDEX])",
+        "for INDEX in 0..1 {} values[INDEX] = 7",
+        "print_i32(read(0)) values[INDEX] += 1",
+        "print_i32(values[KEY_ESCAPE])",
+    ] {
+        let source = format!(
+            "game \"Unshadowed indices\"\n\
+             const INDEX: i32 = 10\n\
+             let values: [i32; 2] = [10, 20]\n\
+             fn read(INDEX: i32) -> i32 {{ return INDEX }}\n\
+             start {{ {body} }}\nupdate(dt: f32) {{}}\ndraw {{}}\n"
+        );
+        assert_error(&source, "constant index 10 is out of bounds for length 2");
+    }
+}
+
+#[test]
 fn whole_array_copy_and_repeated_indexing_use_value_semantics() {
     let source = r#"game "Array Values"
 let values: [i32; 2] = [3, 4]
