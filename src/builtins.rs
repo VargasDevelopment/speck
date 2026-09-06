@@ -14,6 +14,12 @@ pub struct PredefinedConstant {
 
 pub const FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction {
+        name: "sin",
+        params: &[ValueType::F32],
+        return_type: ReturnType::Value(ValueType::F32),
+        llvm_symbol: "@crumb_sin",
+    },
+    BuiltinFunction {
         name: "print_i32",
         params: &[ValueType::I32],
         return_type: ReturnType::Void,

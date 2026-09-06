@@ -243,7 +243,7 @@
       "name": "constant.language.boolean.speck"
     },
     "builtins": {
-      "match": "(?<![A-Za-z0-9_])(?:print_i32|debug_frame|clear_rgb|fill_rect|key_down|key_pressed|key_released|quit)(?![A-Za-z0-9_])(?=\\s*\\()",
+      "match": "(?<![A-Za-z0-9_])(?:sin|print_i32|debug_frame|clear_rgb|fill_rect|key_down|key_pressed|key_released|quit)(?![A-Za-z0-9_])(?=\\s*\\()",
       "name": "support.function.speck"
     },
     "constants": {

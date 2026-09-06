@@ -5,6 +5,7 @@
 #include "crumb.h"
 #include "crumb_internal.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,6 +115,8 @@ int crumb_init(void) {
 }
 
 float crumb_frame_delta(void) { return 1.0f / 60.0f; }
+
+float crumb_sin(float angle) { return sinf(angle); }
 
 void crumb_print_i32(int value) { printf("%d\n", value); }
 
