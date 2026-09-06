@@ -1,0 +1,47 @@
+game "Boots Concept"
+
+// Representative syntax adapted from Speck-Boots/boots.spk.
+struct Platform {
+    x: i32
+    y: i32
+    width: i32
+    height: i32
+    is_exit: bool
+}
+struct Player {
+    x: f32
+    y: f32
+    y_velocity: f32
+    is_grounded: bool
+}
+
+const MAX_PLATFORM_COUNT: i32 = 2
+const LEVEL_AMOUNT: i32 = 1
+const GRAVITY: f32 = 1000.0
+const EMPTY_PLATFORM: Platform = Platform {
+    x: 0, y: 0, width: 0, height: 0, is_exit: false
+}
+const level_platforms: [[Platform; MAX_PLATFORM_COUNT]; LEVEL_AMOUNT] = [
+    [Platform { x: 200, y: 150, width: 40, height: 5, is_exit: true }, EMPTY_PLATFORM]
+]
+let player: Player = Player { x: 150.0, y: 80.0, y_velocity: 0.0, is_grounded: false }
+
+fn draw_platform(platform: Platform) -> void {
+    fill_rect(platform.x, platform.y, platform.width, platform.height, 255, 255, 255)
+}
+
+start {}
+update(dt: f32) {
+    player.y_velocity += GRAVITY * dt
+    player.y += player.y_velocity * dt
+    if key_pressed(KEY_SPACE) && player.is_grounded {
+        player.y_velocity = -450.0
+    }
+    if key_down(KEY_ESCAPE) { quit() }
+}
+draw {
+    clear_rgb(32, 18, 32)
+    for i in 0..MAX_PLATFORM_COUNT {
+        draw_platform(level_platforms[0][i])
+    }
+}

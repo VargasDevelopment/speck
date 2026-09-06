@@ -138,6 +138,9 @@ constants cover W/A/S/D, arrows, Space, Enter, and Escape. Speck sees only these
 stable names and identifiers: AppKit key codes, browser `KeyboardEvent.code`,
 HTTP, TCP, and presenter events remain below the Speck/CRuMB boundary.
 
+A lightweight [VS Code / Cursor extension](editors/vscode/README.md) adds
+syntax highlighting and basic editing for `.spk` files.
+
 ## Current limits
 
 This is an honest small compiler/runtime slice, not a general-purpose language
