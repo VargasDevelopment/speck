@@ -553,11 +553,13 @@ impl<'a> FunctionEmitter<'a> {
         let struct_type = ValueType::Struct(name.to_owned());
         let aggregate_type = llvm_value_type(&struct_type);
         let mut aggregate = "undef".to_owned();
-        for (index, field) in declaration.fields.iter().enumerate() {
-            let initializer = initializers
+        for initializer in initializers {
+            let (index, field) = declaration
+                .fields
                 .iter()
-                .find(|initializer| initializer.name == field.name)
-                .expect("semantic checking guarantees every field initializer");
+                .enumerate()
+                .find(|(_, field)| field.name == initializer.name)
+                .expect("semantic checking guarantees declared initializer fields");
             let value = self.expression_as(&initializer.value, &field.ty);
             let temp = self.temp();
             self.instruction(format!(
