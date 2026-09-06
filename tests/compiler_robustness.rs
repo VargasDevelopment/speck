@@ -1,10 +1,17 @@
+pub mod support;
+
 use std::any::Any;
+use std::collections::BTreeSet;
+use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
 
 use speck::diagnostic::Diagnostic;
 
 const CASES: usize = 5_000;
+const VERIFIED_MUTATIONS: usize = 16;
 const MAX_SOURCE_BYTES: usize = 2_048;
 const SEED: u64 = 0x5EEC_C0DE_D15C_A11E;
 
@@ -70,6 +77,32 @@ draw {}
 "#,
 ];
 
+// Token replacements preserve well-formed programs while changing operands,
+// operations, and control flow. Arbitrary byte edits mostly yield diagnostics
+// or title changes, so they cannot supply meaningful accepted-case coverage alone.
+const SEMANTIC_MUTATIONS: &[(usize, &str, &str)] = &[
+    (1, "LIMIT: i32 = 3", "LIMIT: i32 = 0"),
+    (1, "LIMIT: i32 = 3", "LIMIT: i32 = 4"),
+    (1, "value > 1", "value >= 1"),
+    (1, "return 1", "return -1"),
+    (1, "total += choose(i)", "total *= choose(i)"),
+    (1, "while total < 8", "while total > 8"),
+    (2, "x: 4", "x: -4"),
+    (2, "[true, false]", "[false, true]"),
+    (2, "points[0].x += 1", "points[0].x %= 3"),
+    (2, "return point", "point.x += 2 return point"),
+    (2, "copy(points[1])", "copy(points[0])"),
+    (3, "true && !false", "false || !true"),
+    (3, "f32(3) / 2.0", "f32(3) * 2.0"),
+    (
+        3,
+        "(left + right) * (left - right)",
+        "(left + right) / (left - right)",
+    ),
+    (3, "calculate(7, 2)", "calculate(2, 7)"),
+    (3, "answer != 0", "answer <= 0"),
+];
+
 const FRAGMENTS: &[&str] = &[
     "",
     " ",
@@ -128,65 +161,220 @@ const FRAGMENTS: &[&str] = &[
 
 #[test]
 fn deterministic_source_mutations_never_panic_or_produce_invalid_spans() {
-    let mut random = Random::new(SEED);
+    let Some(directory) =
+        isolated(
+            "deterministic_source_mutations_never_panic_or_produce_invalid_spans",
+            |work| {
+                let mut random = Random::new(SEED);
+                let mut seed_ir = BTreeSet::new();
+                for (index, source) in PROGRAM_SEEDS.iter().enumerate() {
+                    record_case(work, &format!("program seed {index}"), source);
+                    seed_ir.insert(ir_fingerprint(
+                        &exercise(source).expect("robustness seed should compile"),
+                    ));
+                }
+                let mut verified_ir = BTreeSet::new();
 
-    for case in 0..CASES {
-        let seed = PROGRAM_SEEDS[random.index(PROGRAM_SEEDS.len())];
-        let source = mutate(seed, case, &mut random);
-        assert!(source.len() <= MAX_SOURCE_BYTES);
-
-        let outcome = catch_unwind(AssertUnwindSafe(|| exercise(&source)));
-        if let Err(payload) = outcome {
-            panic!(
-                "compiler robustness case {case} panicked (seed {SEED:#x}): {}\n--- source ---\n{source}\n--- end source ---",
-                panic_message(payload.as_ref())
+                let random_mutations = (0..CASES).map(|case| {
+                    let seed = PROGRAM_SEEDS[random.index(PROGRAM_SEEDS.len())];
+                    (
+                        format!("mutation {case}, seed {SEED:#x}"),
+                        mutate(seed, case, &mut random),
+                        false,
+                    )
+                });
+                let semantic_mutations = SEMANTIC_MUTATIONS.iter().enumerate().map(
+                    |(case, &(index, from, to))| {
+                        let seed = PROGRAM_SEEDS[index];
+                        assert_eq!(seed.matches(from).count(), 1, "unique replacement target");
+                        (
+                            format!(
+                                "semantic mutation {case}, program seed {index}: {from:?} -> {to:?}"
+                            ),
+                            seed.replacen(from, to, 1),
+                            true,
+                        )
+                    },
+                );
+                for (name, source, must_compile) in random_mutations.chain(semantic_mutations) {
+                    assert!(source.len() <= MAX_SOURCE_BYTES);
+                    record_case(work, &name, &source);
+                    let ir = exercise(&source);
+                    assert!(!must_compile || ir.is_some(), "{name} should compile");
+                    if let Some(ir) = ir
+                        && verified_ir.len() < VERIFIED_MUTATIONS
+                        && !PROGRAM_SEEDS.contains(&source.as_str())
+                    {
+                        let fingerprint = ir_fingerprint(&ir);
+                        if seed_ir.contains(&fingerprint) || !verified_ir.insert(fingerprint) {
+                            continue;
+                        }
+                        // First-seen order is deterministic. The shared fingerprint
+                        // excludes seed-equivalent and duplicate modules even when
+                        // their title comments differ. Never execute these mutations.
+                        let sample = verified_ir.len() - 1;
+                        fs::write(work.join(format!("mutation-{sample}.ll")), ir)
+                            .expect("mutation IR should write");
+                        fs::copy(
+                            work.join("active-case.txt"),
+                            work.join(format!("mutation-{sample}.txt")),
+                        )
+                        .expect("selected mutation context should persist");
+                    }
+                }
+                assert_eq!(
+                    verified_ir.len(),
+                    VERIFIED_MUTATIONS,
+                    "the corpus must supply a full sample of distinct accepted mutations"
+                );
+            },
+        )
+    else {
+        return;
+    };
+    // The compiler child launches no external tools. Only this surviving
+    // parent supervises verifier process groups, so killing a stuck compiler
+    // cannot leave an independently grouped Clang process without its owner.
+    let work = directory.path();
+    for sample in 0..VERIFIED_MUTATIONS {
+        let name = format!("LLVM verification for sample {sample}");
+        with_case_context(&work.join(format!("mutation-{sample}.txt")), &name, || {
+            support::assert_success(
+                &name,
+                &support::verify_ir(
+                    &work.join(format!("mutation-{sample}.ll")),
+                    &work.join(format!("mutation-{sample}.bc")),
+                ),
             );
-        }
-    }
-}
-
-#[test]
-fn bounded_deep_nesting_is_handled_without_panicking() {
-    let nested = "(".repeat(64) + "1" + &")".repeat(64);
-    let source = format!(
-        "game \"Nested\"\nstart {{ let value: i32 = {nested} print_i32(value) }}\nupdate(dt: f32) {{}}\ndraw {{}}\n"
-    );
-    exercise(&source);
-    speck::compile_to_llvm(&source).expect("bounded nested expressions should compile");
-}
-
-#[test]
-fn robustness_seed_programs_are_valid() {
-    for source in PROGRAM_SEEDS {
-        speck::compile_to_llvm(source).unwrap_or_else(|diagnostics| {
-            panic!(
-                "robustness seed should compile:\n{}",
-                speck::render_diagnostics(Path::new("seed.spk"), source, &diagnostics)
-            )
         });
     }
 }
 
 #[test]
-fn every_seed_truncation_reports_safely() {
-    for source in PROGRAM_SEEDS {
-        for boundary in char_boundaries(source) {
-            exercise(&source[..boundary]);
+fn bounded_deep_nesting_is_handled_without_panicking() {
+    let _ = isolated(
+        "bounded_deep_nesting_is_handled_without_panicking",
+        |work| {
+            let nested = "(".repeat(64) + "1" + &")".repeat(64);
+            let source = format!(
+                "game \"Nested\"\nstart {{ let value: i32 = {nested} print_i32(value) }}\nupdate(dt: f32) {{}}\ndraw {{}}\n"
+            );
+            record_case(work, "64 nested parentheses", &source);
+            exercise(&source).expect("bounded nested expressions should compile");
+        },
+    );
+}
+
+#[test]
+fn robustness_seed_programs_are_valid() {
+    let _ = isolated("robustness_seed_programs_are_valid", |work| {
+        for (index, source) in PROGRAM_SEEDS.iter().enumerate() {
+            record_case(work, &format!("program seed {index}"), source);
+            let ir = exercise(source).expect("robustness seed should compile");
+            // Regression: a changed game-title comment is not a new module.
+            let retitled = source.replacen("game \"", "game \"retitled ", 1);
+            record_case(work, &format!("retitled program seed {index}"), &retitled);
+            let retitled_ir = exercise(&retitled).expect("retitled seed should compile");
+            assert_ne!(
+                ir, retitled_ir,
+                "the regression must change the emitted title"
+            );
+            assert_eq!(ir_fingerprint(&ir), ir_fingerprint(&retitled_ir));
         }
+    });
+}
+
+#[test]
+fn every_seed_truncation_reports_safely() {
+    let _ = isolated("every_seed_truncation_reports_safely", |work| {
+        for (index, source) in PROGRAM_SEEDS.iter().enumerate() {
+            for boundary in char_boundaries(source) {
+                let source = &source[..boundary];
+                record_case(
+                    work,
+                    &format!("seed {index}, truncation {boundary}"),
+                    source,
+                );
+                exercise(source);
+            }
+        }
+    });
+}
+
+// Ignore comments and insignificant line whitespace, preserving quoted IR
+// strings (including semicolons) and all instructions, operands, and globals.
+fn ir_fingerprint(ir: &str) -> String {
+    ir.lines()
+        .map(|line| {
+            let mut quoted = false;
+            let comment = line.char_indices().find_map(|(index, character)| {
+                if character == '"' {
+                    quoted = !quoted;
+                }
+                (character == ';' && !quoted).then_some(index)
+            });
+            line[..comment.unwrap_or(line.len())].trim()
+        })
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+// The child still uses an ordinary test thread stack. Panics, stack-overflow
+// aborts, and compiler hangs become failures of the parent instead of killing
+// or hanging the suite. Persist the active input before entering the compiler,
+// so even an abort/timeout reports a reproducible case rather than losing it.
+// Only the parent receives the workspace, allowing post-compilation tools to
+// run under its supervision after the bounded compiler child has exited.
+fn isolated(name: &str, test: impl FnOnce(&Path)) -> Option<tempfile::TempDir> {
+    const CHILD: &str = "SPECK_ROBUSTNESS_CHILD";
+    if std::env::var(CHILD).as_deref() == Ok(name) {
+        test(&std::env::current_dir().expect("child workspace"));
+        return None;
+    }
+    let directory = support::workspace();
+    let work = directory.path();
+    with_case_context(&work.join("active-case.txt"), name, || {
+        let output = support::run_with_timeout(
+            Command::new(std::env::current_exe().expect("test executable"))
+                .current_dir(work)
+                .args(["--exact", name, "--nocapture"])
+                .env(CHILD, name),
+            Duration::from_secs(60),
+        );
+        support::assert_success(name, &output);
+    });
+    Some(directory)
+}
+
+fn with_case_context(path: &Path, name: &str, test: impl FnOnce()) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(test)) {
+        let active = fs::read_to_string(path).unwrap_or_default();
+        panic!(
+            "{name}: {}\n--- active case and source ---\n{active}\n--- end source ---",
+            panic_message(payload.as_ref())
+        );
     }
 }
 
-fn exercise(source: &str) {
+fn record_case(work: &Path, name: &str, source: &str) {
+    fs::write(work.join("active-case.txt"), format!("{name}\n{source}"))
+        .expect("active robustness input should write");
+}
+
+fn exercise(source: &str) -> Option<String> {
     match speck::compile_to_llvm(source) {
         Ok(ir) => {
             assert!(ir.contains("; Speck game:"));
             assert!(ir.contains("define void @spk_start()"));
+            Some(ir)
         }
         Err(diagnostics) => {
             validate_diagnostics(source, &diagnostics);
             let rendered =
                 speck::render_diagnostics(Path::new("robustness-input.spk"), source, &diagnostics);
             assert!(!rendered.is_empty());
+            None
         }
     }
 }
