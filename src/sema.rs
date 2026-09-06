@@ -552,23 +552,6 @@ fn check_function(
     functions: &HashMap<String, Signature>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    for param in &function.params {
-        if matches!(param.ty, ValueType::Array { .. }) {
-            diagnostics.push(Diagnostic::new(
-                "arrays are not supported as function parameters yet",
-                param.span,
-            ));
-        }
-    }
-    if matches!(
-        function.return_type,
-        ReturnType::Value(ValueType::Array { .. })
-    ) {
-        diagnostics.push(Diagnostic::new(
-            "arrays are not supported as function return types yet",
-            function.span,
-        ));
-    }
     let mut checker = FunctionChecker::new(
         globals,
         constants,
@@ -1054,7 +1037,10 @@ impl<'a> FunctionChecker<'a> {
                     );
                 }
                 for (index, arg) in args.iter().enumerate() {
-                    let actual = self.require_value(arg, "function argument");
+                    let actual = match signature.params.get(index) {
+                        Some(expected) => self.require_value_as(arg, expected, "function argument"),
+                        None => self.require_value(arg, "function argument"),
+                    };
                     if let (Some(expected), Some(actual)) =
                         (signature.params.get(index).cloned(), actual)
                         && expected != actual

@@ -10,6 +10,7 @@ use crate::builtins;
 
 #[derive(Clone)]
 struct Signature {
+    params: Vec<ValueType>,
     return_type: ReturnType,
     symbol: String,
 }
@@ -219,6 +220,7 @@ fn function_signatures(program: &Program) -> HashMap<String, Signature> {
             (
                 builtin.name.to_owned(),
                 Signature {
+                    params: builtin.params.to_vec(),
                     return_type: builtin.return_type.clone(),
                     symbol: builtin.llvm_symbol.to_owned(),
                 },
@@ -230,6 +232,11 @@ fn function_signatures(program: &Program) -> HashMap<String, Signature> {
             signatures.insert(
                 function.name.clone(),
                 Signature {
+                    params: function
+                        .params
+                        .iter()
+                        .map(|param| param.ty.clone())
+                        .collect(),
                     return_type: function.return_type.clone(),
                     symbol: format!("@spk_fn_{}", function.name),
                 },
@@ -415,7 +422,13 @@ impl<'a> FunctionEmitter<'a> {
             } => self.for_statement(name, lower, upper, body),
             StmtKind::Return(value) => {
                 if let Some(value) = value {
-                    let value = self.expression(value);
+                    let expected = self
+                        .function
+                        .return_type
+                        .value_type()
+                        .expect("semantic checking guarantees a value return type")
+                        .clone();
+                    let value = self.expression_as(value, &expected);
                     self.terminate(format!(
                         "ret {} {}",
                         llvm_value_type(&value.value_type()),
@@ -831,8 +844,9 @@ impl<'a> FunctionEmitter<'a> {
                     .clone();
                 let args = args
                     .iter()
-                    .map(|argument| {
-                        let value = self.expression(argument);
+                    .zip(&signature.params)
+                    .map(|(argument, expected)| {
+                        let value = self.expression_as(argument, expected);
                         format!("{} {}", llvm_value_type(&value.value_type()), value.repr)
                     })
                     .collect::<Vec<_>>()
