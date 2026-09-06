@@ -56,7 +56,8 @@ keeps field names and types in declaration order. An iterative strongly
 connected component pass rejects recursive value layout, and the same graph
 propagates invalid array lengths to containing types. Literal checking builds
 a name-to-initializer view for duplicate, missing, and unknown diagnostics
-while LLVM emission always uses declaration order.
+while LLVM emission evaluates initializers in source order and inserts each
+value at its declaration-order field index.
 
 Boolean `&&` and `||` lower directly to branches and merge phi nodes. Numeric
 compound assignment lowers to one target load, one right-expression evaluation,
