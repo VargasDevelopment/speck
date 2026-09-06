@@ -1,12 +1,13 @@
+pub mod support;
+
 use std::fs;
 use std::io::Write;
 use std::net::{Shutdown, TcpStream};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, mpsc};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use speck::dev::{protocol, server};
 
@@ -52,41 +53,15 @@ fn shutdown_drains_queued_frames_and_preserves_transport_errors() {
 #[test]
 fn development_command_streams_frames_and_stops_with_game() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut child = Command::new(env!("CARGO_BIN_EXE_speck"))
-        .current_dir(root)
-        .args([
-            "dev",
-            "--frames",
-            "3",
-            "--port",
-            "0",
-            "examples/moving_rectangle.spk",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("development command should start");
-
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if child
-            .try_wait()
-            .expect("development command status should be readable")
-            .is_some()
-        {
-            break;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("development command did not stop after its frame limit");
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-
-    let output = child
-        .wait_with_output()
-        .expect("development command output should be collected");
+    let directory = support::workspace();
+    let work = directory.path();
+    let output = support::run_with_timeout(
+        Command::new(env!("CARGO_BIN_EXE_speck"))
+            .current_dir(work)
+            .args(["dev", "--frames", "3", "--port", "0"])
+            .arg(root.join("examples/moving_rectangle.spk")),
+        Duration::from_secs(10),
+    );
     assert!(
         output.status.success(),
         "development command failed\nstdout:\n{}\nstderr:\n{}",
@@ -97,14 +72,13 @@ fn development_command_streams_frames_and_stops_with_game() {
     assert!(stdout.contains("Viewer URL: http://127.0.0.1:"));
     assert!(stdout.contains("Frames received: 3"));
     assert!(stdout.contains("stopped cleanly"));
-    assert!(root.join("build/moving_rectangle_dev").is_file());
+    assert!(work.join("build/moving_rectangle_dev").is_file());
 }
 
 #[test]
 fn development_games_can_quit_before_the_frame_limit() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join(format!("target/dev_early_quit_{}", std::process::id()));
-    fs::create_dir_all(&work).expect("test directory should be created");
+    let directory = support::workspace();
+    let work = directory.path();
     let source = work.join("quit.spk");
     for (phase, expected_frames) in [("start", 0), ("update", 1), ("draw", 1)] {
         for limit in [None, Some("3")] {
@@ -121,33 +95,13 @@ fn development_games_can_quit_before_the_frame_limit() {
             .expect("test source should write");
             let mut command = Command::new(env!("CARGO_BIN_EXE_speck"));
             command
-                .current_dir(&work)
+                .current_dir(work)
                 .args(["dev", "--port", "0"])
                 .arg(&source);
             if let Some(limit) = limit {
                 command.args(["--frames", limit]);
             }
-            let mut child = command
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .expect("development command should start");
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while child
-                .try_wait()
-                .expect("development command status should be readable")
-                .is_none()
-            {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    panic!("development command did not stop after {phase} requested quit");
-                }
-                thread::sleep(Duration::from_millis(25));
-            }
-            let output = child
-                .wait_with_output()
-                .expect("development command output should be collected");
+            let output = support::run_with_timeout(&mut command, Duration::from_secs(10));
             assert!(
                 output.status.success(),
                 "quit from {phase} with limit {limit:?} failed\nstdout:\n{}\nstderr:\n{}",

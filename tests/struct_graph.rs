@@ -1,5 +1,7 @@
+pub mod support;
+
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const ENTRIES: &str = "start {}\nupdate(dt: f32) {}\ndraw {}\n";
 
@@ -41,29 +43,17 @@ fn shared_struct_graphs_finish_within_budget() {
         return;
     }
 
-    // Isolate the compiler so an exponential-time regression cannot hang the suite.
-    let mut child = Command::new(std::env::current_exe().expect("test executable"))
-        .args([
-            "--exact",
-            "shared_struct_graphs_finish_within_budget",
-            "--nocapture",
-        ])
-        .env(CHILD, "1")
-        .spawn()
-        .expect("spawn graph regression test");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if let Some(status) = child.try_wait().expect("poll graph regression test") {
-            assert!(status.success(), "graph regression child failed: {status}");
-            break;
-        }
-        if Instant::now() >= deadline {
-            child.kill().expect("stop timed-out graph regression test");
-            child.wait().expect("reap graph regression test");
-            panic!("shared struct graph analysis exceeded ten seconds");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    let output = support::run_with_timeout(
+        Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "shared_struct_graphs_finish_within_budget",
+                "--nocapture",
+            ])
+            .env(CHILD, "1"),
+        Duration::from_secs(10),
+    );
+    support::assert_success("shared graph regression subprocess", &output);
 }
 
 #[test]

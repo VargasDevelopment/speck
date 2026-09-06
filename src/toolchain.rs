@@ -147,6 +147,13 @@ impl BuildEnvironment {
         &self.clang
     }
 
+    /// Create a Clang invocation with the discovered host target and SDK.
+    pub fn clang_command(&self) -> Command {
+        let mut command = Command::new(&self.clang);
+        command.args(self.target_args());
+        command
+    }
+
     pub fn linker(&self) -> &Path {
         &self.linker
     }

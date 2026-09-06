@@ -1,6 +1,9 @@
+pub mod support;
+
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
+use support::{assert_success, build_in};
 
 #[test]
 fn basic_zero_and_nonzero_ranges_execute_exclusively() {
@@ -146,13 +149,10 @@ draw {}
 #[test]
 fn final_platform_example_iterates_struct_array_and_verifies_llvm() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join("target/range_platform_e2e");
-    fs::create_dir_all(&work).expect("range platform directory should exist");
-    let executable = build_in(&work, &root.join("examples/platform_array.spk"));
-    let run = Command::new(executable)
-        .current_dir(&work)
-        .output()
-        .expect("range platform example should start");
+    let directory = support::workspace();
+    let work = directory.path();
+    let executable = build_in(work, &root.join("examples/platform_array.spk"));
+    let run = support::run(Command::new(executable).current_dir(work));
     assert_success("range platform example", &run);
     assert!(run.stdout.is_empty());
 
@@ -173,12 +173,10 @@ fn final_platform_example_iterates_struct_array_and_verifies_llvm() {
     assert!(ir.contains("icmp slt i32"));
     assert!(!ir.contains("while_condition"));
 
-    let verify = Command::new("llvm-as")
-        .arg(work.join("build/platform_array.ll"))
-        .arg("-o")
-        .arg(work.join("verified.bc"))
-        .output()
-        .expect("llvm-as should start");
+    let verify = support::verify_ir(
+        &(work.join("build/platform_array.ll")),
+        &(work.join("verified.bc")),
+    );
     assert_success("range LLVM verification", &verify);
 }
 
@@ -191,37 +189,12 @@ fn assert_error(source: &str, expected: &str) {
 }
 
 fn run_source(name: &str, source: &str) -> Output {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join("target").join(name);
-    fs::create_dir_all(&work).expect("range test directory should exist");
+    let directory = support::workspace();
+    let work = directory.path();
     let source_path = work.join(format!("{name}.spk"));
     fs::write(&source_path, source).expect("range source should be written");
-    let executable = build_in(&work, &source_path);
-    let output = Command::new(executable)
-        .current_dir(&work)
-        .output()
-        .expect("range executable should start");
+    let executable = build_in(work, &source_path);
+    let output = support::run(Command::new(executable).current_dir(work));
     assert_success(name, &output);
     output
-}
-
-fn build_in(work: &Path, source: &Path) -> PathBuf {
-    let build = Command::new(env!("CARGO_BIN_EXE_speck"))
-        .current_dir(work)
-        .args(["build"])
-        .arg(source)
-        .output()
-        .expect("Speck compiler should start");
-    assert_success("range build", &build);
-    let stem = source.file_stem().expect("source should have a file stem");
-    work.join("build").join(stem)
-}
-
-fn assert_success(description: &str, output: &Output) {
-    assert!(
-        output.status.success(),
-        "{description} failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
