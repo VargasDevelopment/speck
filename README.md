@@ -32,6 +32,10 @@ is optional because Clang can validate and compile textual LLVM IR directly.
 
 ```sh
 cargo test --all-targets
+
+# Check source without Clang, LLVM tools, or build artifacts
+cargo run -- check examples/crumb_bum.spk
+
 cargo run -- build examples/crumb_bum.spk
 ./build/crumb_bum
 
@@ -81,6 +85,12 @@ otool -L build/moving_rectangle_native
 The bounded compiler/runtime reliability audit, its deterministic regression
 strategy, confirmed findings, and remaining policy questions are recorded in
 [`docs/reliability.md`](docs/reliability.md).
+
+`speck check <game.spk>` checks syntax and semantics with the same source
+analysis and diagnostics used by compilation. It exits successfully for valid
+source and reports errors for invalid source without discovering native tools,
+emitting LLVM IR, or creating build artifacts. An installed `speck` binary needs
+no Clang or linker for this command.
 
 The build command writes host-tagged, inspectable LLVM IR to
 `build/crumb_bum.ll`, validates it with a compatible `llvm-as` when available
