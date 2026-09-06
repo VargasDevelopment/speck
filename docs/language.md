@@ -26,7 +26,7 @@ block         = "{" statement* "}" ;
 statement     = local | assignment | if | while | for | return
               | expression ";"? ;
 local         = "let" identifier ":" value_type "=" expression ";"? ;
-assignment    = assignable ("=" | "+=" | "-=" | "*=" | "/=")
+assignment    = assignable ("=" | "+=" | "-=" | "*=" | "/=" | "%=")
                 expression ";"? ;
 assignable    = postfix ;
 if            = "if" expression block ("else" block)? ;

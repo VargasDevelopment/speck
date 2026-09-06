@@ -1,7 +1,8 @@
 # Architecture
 
 Speck remains one Rust crate plus a small C runtime. The compiler has one direct
-development-process dependency (`ctrlc`); generated games do not link Rust:
+production dependency (`ctrlc`); integration tests also use `tempfile`. Generated
+games do not link Rust:
 
 ```text
 .spk source
@@ -18,12 +19,17 @@ development-process dependency (`ctrlc`); generated games do not link Rust:
 
 `src/lib.rs` exposes the analysis and LLVM-emission pipeline. `src/main.rs` and
 `src/cli.rs` are a thin command boundary. `lexer`, `parser`, and `sema` are
-independent stages that return source-located diagnostics. The AST is small
-enough that a separate HIR would currently duplicate it without simplifying
-lowering, so the validated AST goes directly to `codegen/llvm.rs`.
+independent stages that return source-located diagnostics. The normal pipeline
+sends the validated AST directly to `codegen/llvm.rs`; it does not yet have a
+separate checked-program type. Parser recursion and constructed expression
+trees share a nesting budget, with expression parsing isolated in
+`parser/expression.rs`.
 
 The LLVM backend only produces text. Tool discovery, files, subprocesses, and
 linking live in `toolchain.rs`, keeping the emitter independent of LLVM's API.
+`runtime_sources.rs` embeds CRuMB's source bundle and owns temporary input
+directories during native compilation, so installed compilers do not depend
+on their original checkout.
 A future library-based backend can therefore replace the emitter without
 changing parsing or semantics.
 
@@ -32,18 +38,19 @@ arrays) from `ReturnType` (a value type or `void`). Array lengths retain their
 source form until semantic analysis resolves positive literals and `i32`
 constants.
 Semantic analysis collects constant, global, and function names before checking
-bodies. A small dependency-walking constant evaluator annotates top-level
-constants and mutable-global initializers with scalar or aggregate values,
-detects cycles and checked-expression errors, and lets LLVM emit native
-initializers. This remains small enough that a separate HIR would duplicate
-rather than simplify the pipeline.
+bodies. Array-length constant resolution runs before ordinary constant and
+global-initializer evaluation. These paths retain separate dependency
+bookkeeping and aggregate evaluation logic; consolidation is current
+structural work on the [roadmap](roadmap.md). Evaluated scalar and aggregate
+values let LLVM emit native initializers without runtime initialization.
 
 Struct declarations are collected before value and function checking, so type
 use and literals can refer forward within the module. Compiler-only metadata
-keeps each field's source name, type, and declaration index. A graph walk
-rejects recursive value layout. Literal checking builds a name-to-initializer
-view for duplicate, missing, and unknown diagnostics while LLVM emission always
-uses declaration order.
+keeps field names and types in declaration order. An iterative strongly
+connected component pass rejects recursive value layout, and the same graph
+propagates invalid array lengths to containing types. Literal checking builds
+a name-to-initializer view for duplicate, missing, and unknown diagnostics
+while LLVM emission always uses declaration order.
 
 Boolean `&&` and `||` lower directly to branches and merge phi nodes. Numeric
 compound assignment lowers to one target load, one right-expression evaluation,

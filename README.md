@@ -2,10 +2,11 @@
 
 **Speck — a tiny language for tiny games.**
 
-Speck is a deliberately small compiled language whose eventual forcing
-function is a complete native game distribution that fits on a 1.44 MB floppy
-disk. Speck source is checked and lowered to readable textual LLVM IR, compiled
-to native object code, and linked with CRuMB.
+Speck is a deliberately small compiled language for native games and visual
+experiments. Small binaries remain a design value; fitting a complete game
+distribution on a 1.44 MB floppy disk is an optional challenge. Speck source is
+checked and lowered to readable textual LLVM IR, compiled to native object
+code, and linked with CRuMB.
 
 **CRuMB — Compact Runtime for ultra-Minimal Binaries.**
 

@@ -1,7 +1,10 @@
 # Byte budget
 
-The eventual maximum distribution size is **1,474,560 bytes**, the capacity of
-a 1.44 MB floppy disk.
+The optional floppy challenge limits a complete game distribution to
+**1,474,560 bytes**, the capacity of a 1.44 MB floppy disk. Other Speck projects
+should still value small binaries without treating this as a universal limit.
+The measurements below record earlier implementation slices and their host
+requirements; they are not measurements of the current compiler revision.
 
 On the audited Ubuntu 26.04 x86_64 environment, the verified software-graphics
 infrastructure example is **5,816 bytes**, and the existing `crumb_bum` example

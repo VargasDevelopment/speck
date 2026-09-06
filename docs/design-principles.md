@@ -3,7 +3,8 @@
 Speck is a tiny ahead-of-time compiled language for tiny games and visual
 programs. Its immediate-mode lifecycle and small graphics API should make
 animations, generative sketches, simulations, and Processing-like experiments
-pleasant without weakening the floppy-sized native-game constraint.
+pleasant while preserving small native binaries. A floppy-sized distribution
+is an optional challenge profile, not a universal project constraint.
 
 - Prefer explicit behavior over implicit coercion. Numeric conversions should
   be visible at the point where precision or representation changes.
@@ -15,9 +16,10 @@ pleasant without weakening the floppy-sized native-game constraint.
   language. Compound assignment is a statement and evaluates its right side
   once.
 - Add language features in response to real program pressure. Programs we
-  genuinely try to write should drive the language.
+  actually try to write should drive the language.
 - Keep compile-time convenience out of shipped runtime cost. Constants are
-  evaluated by the compiler and inlined without storage or initialization code.
+  evaluated by the compiler without dynamic initialization; aggregate values
+  may still require native constant storage.
 - Preserve CRuMB as a narrow portable boundary. Language ergonomics must not
   couple Speck semantics to a presenter, window system, or host platform.
 - Expose stable game meaning, not host events. Speck asks whether a named
