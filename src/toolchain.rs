@@ -84,7 +84,12 @@ impl HostTarget {
 
     fn link_args(self) -> &'static [&'static str] {
         match self {
-            Self::LinuxX86_64 => &["-fuse-ld=lld", "-Wl,--gc-sections,--strip-all"],
+            Self::LinuxX86_64 => &[
+                "-fuse-ld=lld",
+                "-Wl,--gc-sections,--strip-all",
+                "-Wl,--as-needed",
+                "-lm",
+            ],
             Self::MacOsArm64 => &["-Wl,-dead_strip,-S,-x"],
         }
     }
@@ -551,13 +556,14 @@ fn link_executable(
     presenter: Presenter,
 ) -> Result<(), String> {
     let mut args = environment.target_args();
-    args.extend(environment.target.link_args().iter().map(OsString::from));
     args.push(game_object.as_os_str().to_owned());
     args.extend(
         runtime_objects
             .iter()
             .map(|object| object.as_os_str().to_owned()),
     );
+    // Target libraries follow their referring objects for linker resolution.
+    args.extend(environment.target.link_args().iter().map(OsString::from));
     args.extend(presenter.link_args().iter().map(OsString::from));
     args.push(OsString::from("-o"));
     args.push(executable.as_os_str().to_owned());
@@ -778,7 +784,12 @@ mod tests {
         assert_eq!(target.executable_extension(), "");
         assert_eq!(
             target.link_args(),
-            ["-fuse-ld=lld", "-Wl,--gc-sections,--strip-all"]
+            [
+                "-fuse-ld=lld",
+                "-Wl,--gc-sections,--strip-all",
+                "-Wl,--as-needed",
+                "-lm"
+            ]
         );
         assert!(target.c_compile_args().contains(&"-ffunction-sections"));
         assert_eq!(target.runtime_platform_sources(), ["platform/posix_main.c"]);

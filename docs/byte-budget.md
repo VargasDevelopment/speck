@@ -12,7 +12,7 @@ is **5,832 bytes** after linking the framebuffer and PPM presenter. Both are
 stripped ELF position-independent executables with no debug sections. These
 post-presenter-boundary measurements were collected on 2026-07-26.
 
-The current Linux development artifact is dynamically linked. Its interpreter
+The measured Linux development artifact was dynamically linked. Its interpreter
 is `/lib64/ld-linux-x86-64.so.2`, and its only reported shared-library
 dependency is `libc.so.6`. LLVM and the Speck compiler are build-time tools and
 are not part of the game executable, but the host dynamic loader and C library
@@ -233,3 +233,19 @@ This development artifact is **not proof of final standalone floppy-disk
 compliance**. A byte count below the limit does not establish that the eventual
 game, assets, audio, platform code, or self-contained runtime will fit, and a
 dynamically linked executable is not a self-sufficient distribution.
+
+## Sine slice measurement
+
+On macOS ARM64 with Apple Clang, a minimal PPM game printing `0` measured
+**34,744 bytes** both before and after adding the sine builtin. Replacing that
+print with `print_i32(i32(sin(1.0) * 100.0))` measured **34,824 bytes**: an
+80-byte increase for this small caller, wrapper, and dynamic binding. These
+2026-09-06 measurements use the same source layout and default build flags;
+they are not a universal per-call cost. The unused wrapper is dead-stripped.
+
+Linux links the standard math library (`-lm`) with `--as-needed`, retaining
+it only when a game uses `sinf`; macOS provides it
+through libSystem. A game using sine therefore depends on the host math
+library rather than shipping a private approximation. The [Linux C library
+reference](https://www.man7.org/linux/man-pages/man3/sinf.3.html) documents
+that link dependency and nonfinite input behavior.

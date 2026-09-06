@@ -397,6 +397,17 @@ only in this statement syntax: ranges are not values. There is no inclusive
 range, custom or negative step, array-item iteration, iterator protocol,
 `break`, `continue`, or loop expression.
 
+## Periodic math
+
+`sin(angle: f32) -> f32` returns the sine of an angle in radians, using the
+host C library's single-precision `sinf`. Finite results lie in `[-1.0, 1.0]`;
+NaN and either infinity produce NaN. Finite results are approximate and are
+not guaranteed bit-identical across platforms. Keep animation phases bounded
+to preserve useful `f32` input precision during long runs.
+
+Like other builtins, `sin` is a runtime function, not a constant initializer.
+It requires an explicit `f32` argument; use `f32(integer)` when converting.
+
 ## CRuMB functions and graphics
 
 The available effect-only functions all return real `void`:
