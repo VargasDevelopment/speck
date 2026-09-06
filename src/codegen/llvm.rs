@@ -78,7 +78,7 @@ pub fn emit_for_target(program: &CheckedProgram, target_triple: Option<&str>) ->
                 global.name.clone(),
                 Variable {
                     ty: global.ty.clone(),
-                    pointer: format!("@spk_global_{}", global.name),
+                    pointer: format!("@{}", symbol_name("global", &global.name)),
                 },
             )
         })
@@ -106,7 +106,7 @@ pub fn emit_for_target(program: &CheckedProgram, target_triple: Option<&str>) ->
                 constant.name.clone(),
                 Variable {
                     ty: constant.ty.clone(),
-                    pointer: format!("@spk_const_{}", constant.name),
+                    pointer: format!("@{}", symbol_name("const", &constant.name)),
                 },
             );
         }
@@ -154,8 +154,8 @@ pub fn emit_for_target(program: &CheckedProgram, target_triple: Option<&str>) ->
             .join(", ");
         writeln!(
             output,
-            "%spk_struct_{} = type {{ {fields} }}",
-            declaration.name
+            "%{} = type {{ {fields} }}",
+            symbol_name("struct", &declaration.name)
         )
         .expect("writing to a string cannot fail");
     }
@@ -171,8 +171,8 @@ pub fn emit_for_target(program: &CheckedProgram, target_triple: Option<&str>) ->
         if is_aggregate_constant(value) {
             writeln!(
                 output,
-                "@spk_const_{} = internal constant {} {}",
-                constant.name,
+                "@{} = internal constant {} {}",
+                symbol_name("const", &constant.name),
                 llvm_value_type(&constant.ty),
                 llvm_constant(value)
             )
@@ -186,8 +186,8 @@ pub fn emit_for_target(program: &CheckedProgram, target_triple: Option<&str>) ->
             .expect("semantic checking evaluates every global initializer");
         writeln!(
             output,
-            "@spk_global_{} = internal global {} {}",
-            global.name,
+            "@{} = internal global {} {}",
+            symbol_name("global", &global.name),
             llvm_value_type(&global.ty),
             llvm_constant(value)
         )
@@ -238,7 +238,7 @@ fn function_signatures(program: &Program) -> HashMap<String, Signature> {
                         .map(|param| param.ty.clone())
                         .collect(),
                     return_type: function.return_type.clone(),
-                    symbol: format!("@spk_fn_{}", function.name),
+                    symbol: format!("@{}", symbol_name("fn", &function.name)),
                 },
             );
         }
@@ -293,7 +293,7 @@ impl<'a> FunctionEmitter<'a> {
             .collect::<Vec<_>>()
             .join(", ");
         let symbol = match self.function.kind {
-            FunctionKind::Named => format!("spk_fn_{}", self.function.name),
+            FunctionKind::Named => symbol_name("fn", &self.function.name),
             FunctionKind::Start => "spk_start".into(),
             FunctionKind::Update => "spk_update".into(),
             FunctionKind::Draw => "spk_draw".into(),
@@ -789,7 +789,8 @@ impl<'a> FunctionEmitter<'a> {
                 let field_type = field.ty.clone();
                 let temp = self.temp();
                 self.instruction(format!(
-                    "{temp} = extractvalue %spk_struct_{struct_name} {}, {index}",
+                    "{temp} = extractvalue %{} {}, {index}",
+                    symbol_name("struct", &struct_name),
                     base.repr
                 ));
                 Value {
@@ -1145,7 +1146,7 @@ fn llvm_value_type(ty: &ValueType) -> String {
         ValueType::I32 => "i32".into(),
         ValueType::F32 => "float".into(),
         ValueType::Bool => "i1".into(),
-        ValueType::Struct(name) => format!("%spk_struct_{name}"),
+        ValueType::Struct(name) => format!("%{}", symbol_name("struct", name)),
         ValueType::Array {
             element,
             length: ArrayLength::Resolved(length),
@@ -1202,6 +1203,29 @@ fn is_aggregate_constant(value: &ConstantValue) -> bool {
 
 fn llvm_float(value: f32) -> String {
     format!("0x{:016X}", (value as f64).to_bits())
+}
+
+/// LLVM quoted identifiers preserve semantic names without exposing an encoded
+/// spelling to semantic diagnostics. Encode bytes, including UTF-8 and quotes,
+/// in exactly one place for every declaration and reference.
+fn symbol_name(kind: &str, name: &str) -> String {
+    let plain = format!("spk_{kind}_{name}");
+    if plain
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return plain;
+    }
+    let mut quoted = String::from("\"");
+    for byte in plain.bytes() {
+        if byte.is_ascii_alphanumeric() || byte == b'_' {
+            quoted.push(char::from(byte));
+        } else {
+            write!(quoted, "\\{byte:02X}").expect("writing to a string cannot fail");
+        }
+    }
+    quoted.push('"');
+    quoted
 }
 
 #[cfg(test)]

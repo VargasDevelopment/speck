@@ -6,7 +6,10 @@ begins a line comment.
 
 ```text
 program       = "game" string ";"? declaration* EOF ;
-declaration   = struct | constant | global | function | start | update | draw ;
+declaration   = import | struct | constant | global | function | start | update | draw ;
+module        = (import | struct | constant | global | function)* EOF ;
+import        = "import" string "as" identifier ";"? ;
+name          = identifier ("::" identifier)? ;
 struct        = "struct" identifier "{" struct_field* "}" ;
 struct_field  = identifier ":" value_type ","? ;
 constant      = "const" identifier ":" value_type "=" expression ";"? ;
@@ -17,9 +20,9 @@ parameter     = identifier ":" value_type ;
 start         = "start" block ;
 update        = "update" "(" identifier ":" value_type ")" block ;
 draw          = "draw" block ;
-value_type    = "i32" | "f32" | "bool" | identifier
+value_type    = "i32" | "f32" | "bool" | name
               | "[" value_type ";" array_length "]" ;
-array_length  = integer | identifier ;
+array_length  = integer | name ;
 return_type   = value_type | "void" ;
 
 block         = "{" statement* "}" ;
@@ -45,8 +48,8 @@ unary         = ("-" | "!") unary | postfix ;
 postfix       = primary (("[" expression "]") | ("." identifier))* ;
 primary       = integer | float | "true" | "false"
               | "[" (expression ("," expression)* ","?)? "]"
-              | identifier "{" field_initializer* "}"
-              | identifier | identifier "(" arguments? ")"
+              | name "{" field_initializer* "}"
+              | name | name "(" arguments? ")"
               | ("i32" | "f32") "(" arguments? ")"
               | "(" expression ")" ;
 arguments     = expression ("," expression)* ;
@@ -56,7 +59,55 @@ field_initializer = identifier ":" expression ","? ;
 `i32(...)` and `f32(...)` are conversion expressions, not function calls.
 Their type names are reserved only where the grammar already expects a type or
 conversion. The lexer uses longest-match rules for `+=`, `-=`, `*=`, `/=`, `%=`,
-`<=`, `>=`, `==`, `!=`, `&&`, `||`, `->`, and `..`.
+`<=`, `>=`, `==`, `!=`, `&&`, `||`, `->`, `::`, and `..`.
+
+## Files and imports
+
+A game starts with its `game` title and owns the three lifecycle blocks.
+Other `.spk` files contain structs, constants, globals, named functions, and
+imports. They do not declare a game title or lifecycle blocks.
+
+```text
+// game.spk
+game "Rooms"
+import "rooms.spk" as rooms
+start { print_i32(rooms::SPAWNS[0].x) }
+update(dt: f32) {}
+draw {}
+
+// rooms.spk
+struct Point { x: i32 y: i32 }
+const COUNT: i32 = 2
+const SPAWNS: [Point; COUNT] = [Point { x: 10, y: 20 }, Point { x: 30, y: 40 }]
+```
+
+Imports are top-level declarations, and may appear before or after the
+other declarations following the game title. Paths are relative to the file
+containing the import, must use `.spk`, and can contain spaces or Unicode.
+An explicit alias is required. Use `rooms::Point` for a type or struct literal,
+`rooms::COUNT` for a constant or array length, and `rooms::make()` for a function.
+Qualified globals also support reading and assignment.
+
+Every declaration in an imported file is accessible through its alias.
+Unqualified names inside that file refer to its own declarations, lexical
+locals, or builtins. Each file imports its own dependencies; imported aliases
+are not reexported, and qualified names contain exactly one `::`.
+Aliases cannot duplicate or conflict with top-level declarations or builtins.
+Local values may share an alias's spelling because `alias::name` explicitly
+selects the module namespace.
+
+A canonical file path identifies one module, even when several files import it
+through different relative paths, aliases, or symlinks. Its named types have one
+identity and its globals have one storage location. Two different files defining
+`Point` produce distinct types. Declaration and import order do not change this
+identity. Constants and globals retain their existing compile-time initializer
+rules; importing a file executes no code. Import cycles are rejected, and import
+nesting is limited to 128 files.
+
+`check`, `build`, `dev`, and `run` load the full import closure from the entry
+file. The Rust `analyze_path` API does the same. The source-string `analyze` API
+supports standalone programs and reports that imports require a file path.
+There are no packages, selective exports, or reexports.
 
 ## Types and functions
 
@@ -482,3 +533,13 @@ deeply nested blocks, types, calls, and operators, as well as long binary or
 field/index chains whose trees become deep without extra parentheses. Split
 such expressions into intermediate values or helpers. Array width and the
 number of independent declarations do not count as nesting.
+
+
+Resolved compile-time aggregate values have a separate limit of 128 nested
+array or struct levels. Scalars have depth zero; each enclosing array or struct
+adds one level. This counts the resulting value, including values referenced
+from other constants, regardless of declaration order or file boundaries.
+The same limit applies to constant declarations, global initializers, and
+constants evaluated for array lengths. Exceeding it reports the constructor
+that would create the oversized value. Splitting a value across declarations
+or files does not bypass this limit. Array width is not aggregate depth.

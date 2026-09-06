@@ -1,6 +1,8 @@
 use crate::ast::Program;
 use crate::diagnostic::Diagnostic;
+use crate::source::{AnalysisError, SourceMap};
 use crate::{lexer, parser, sema};
+use std::path::{Path, PathBuf};
 
 /// An owned program that has successfully completed semantic validation.
 ///
@@ -36,14 +38,30 @@ use crate::{lexer, parser, sema};
 ///     r#"game "Example" start {} update(dt: f32) {} draw {}"#,
 /// ).unwrap();
 /// let ast = speck::parser::parse(tokens).unwrap();
-/// let program = speck::CheckedProgram { ast };
+/// let program = speck::CheckedProgram { ast, sources: Default::default() };
 /// ```
 #[derive(Debug)]
 pub struct CheckedProgram {
     ast: Program,
+    sources: SourceMap,
 }
 
 impl CheckedProgram {
+    /// Source text and dependency paths used by this checked compilation.
+    pub fn sources(&self) -> &SourceMap {
+        &self.sources
+    }
+
+    fn validate(mut ast: Program, sources: SourceMap) -> Result<Self, AnalysisError> {
+        match sema::check(&mut ast) {
+            Ok(()) => Ok(Self { ast, sources }),
+            Err(diagnostics) => Err(AnalysisError {
+                sources,
+                diagnostics,
+            }),
+        }
+    }
+
     /// Borrow the validated AST for read-only inspection.
     pub fn ast(&self) -> &Program {
         &self.ast
@@ -53,7 +71,14 @@ impl CheckedProgram {
 /// Parse and validate source, retaining the single AST in an immutable owner.
 pub fn analyze(source: &str) -> Result<CheckedProgram, Vec<Diagnostic>> {
     let tokens = lexer::lex(source)?;
-    let mut ast = parser::parse(tokens)?;
-    sema::check(&mut ast)?;
-    Ok(CheckedProgram { ast })
+    let ast = parser::parse(tokens)?;
+    let mut sources = SourceMap::default();
+    sources.add(PathBuf::from("<source>"), source.to_owned());
+    CheckedProgram::validate(ast, sources).map_err(|error| error.diagnostics)
+}
+
+/// Load an entry file and its import closure, resolve names, and validate once.
+pub fn analyze_path(path: &Path) -> Result<CheckedProgram, AnalysisError> {
+    let (ast, sources) = crate::modules::load(path)?;
+    CheckedProgram::validate(ast, sources)
 }

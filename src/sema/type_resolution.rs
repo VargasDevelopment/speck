@@ -4,20 +4,19 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    ArrayLength, Block, ConstantValue, Program, ReturnType, StmtKind, StructDecl, ValueType,
+    ArrayLength, Block, ConstantValue, Expr, Program, ReturnType, StmtKind, StructDecl, ValueType,
 };
-use crate::builtins;
 use crate::diagnostic::{Diagnostic, Span};
 
-use super::constants::{ConstantDefinition, evaluate_expression, evaluate_typed_expression};
+use super::constants::{
+    ConstantDefinition, ConstantValues, Evaluation, EvaluationError, Phase, validate_constant_type,
+};
 use super::push_unique_diagnostic;
 
 struct LengthConstantEvaluator {
     definitions: HashMap<String, ConstantDefinition>,
     structs: HashMap<String, StructDecl>,
-    values: HashMap<String, ConstantValue>,
-    failures: HashMap<String, Diagnostic>,
-    visiting: Vec<String>,
+    cache: ConstantValues,
 }
 
 impl LengthConstantEvaluator {
@@ -42,164 +41,199 @@ impl LengthConstantEvaluator {
                 .iter()
                 .map(|declaration| (declaration.name.clone(), declaration.clone()))
                 .collect(),
-            values: builtins::CONSTANTS
-                .iter()
-                .map(|constant| (constant.name.to_owned(), constant.value.clone()))
-                .collect(),
-            failures: HashMap::new(),
-            visiting: Vec::new(),
+            cache: ConstantValues::new(),
         }
     }
 
     fn evaluate(&mut self, name: &str, usage_span: Span) -> Result<i32, Diagnostic> {
-        if self
-            .definitions
-            .get(name)
-            .is_some_and(|definition| definition.ty != ValueType::I32)
-        {
-            return Err(Diagnostic::new(
-                format!("array length constant `{name}` must have type `i32`"),
-                usage_span,
-            ));
-        }
-        match self.evaluate_value(name, usage_span)? {
-            ConstantValue::I32(value) => Ok(value),
-            _ => Err(Diagnostic::new(
-                format!("array length constant `{name}` must evaluate to `i32`"),
-                usage_span,
-            )),
+        require_length_type(name, usage_span, &self.definitions)?;
+        let value = self.cache.evaluate(
+            name,
+            usage_span,
+            &self.definitions,
+            Phase::ArrayLength,
+            |definition| LengthEvaluation::new(definition, &self.structs),
+            |name, definition, evaluation, cache| {
+                let value = evaluation.resume(&self.definitions, cache)?;
+                validate_constant_type(name, definition, &evaluation.types.ty, value)
+                    .map_err(Into::into)
+            },
+        )?;
+        length_value(value, name, usage_span)
+    }
+}
+
+fn require_length_type(
+    name: &str,
+    span: Span,
+    definitions: &HashMap<String, ConstantDefinition>,
+) -> Result<(), Diagnostic> {
+    if definitions
+        .get(name)
+        .is_some_and(|definition| definition.ty != ValueType::I32)
+    {
+        Err(Diagnostic::new(
+            format!("array length constant `{name}` must have type `i32`"),
+            span,
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn length_value(value: ConstantValue, name: &str, span: Span) -> Result<i32, Diagnostic> {
+    match value {
+        ConstantValue::I32(value) => Ok(value),
+        _ => Err(Diagnostic::new(
+            format!("array length constant `{name}` must evaluate to `i32`"),
+            span,
+        )),
+    }
+}
+
+struct LengthEvaluation<'a> {
+    init: &'a Expr,
+    types: PreparedTypes,
+    evaluation: Option<Evaluation<'a>>,
+}
+
+impl<'a> LengthEvaluation<'a> {
+    fn new(definition: &'a ConstantDefinition, structs: &HashMap<String, StructDecl>) -> Self {
+        Self {
+            init: &definition.init,
+            types: PreparedTypes::new(&definition.ty, structs),
+            evaluation: None,
         }
     }
 
-    fn evaluate_value(
+    fn resume(
         &mut self,
-        name: &str,
-        usage_span: Span,
-    ) -> Result<ConstantValue, Diagnostic> {
-        if let Some(value) = self.values.get(name) {
-            return Ok(value.clone());
-        }
-        if let Some(diagnostic) = self.failures.get(name) {
-            return Err(diagnostic.clone());
-        }
-        let Some(definition) = self.definitions.get(name).cloned() else {
-            return Err(Diagnostic::new(
-                format!("unknown array-length constant `{name}`"),
-                usage_span,
-            ));
+        definitions: &HashMap<String, ConstantDefinition>,
+        cache: &ConstantValues,
+    ) -> Result<ConstantValue, EvaluationError> {
+        self.types.resume(definitions, cache)?;
+        self.evaluation
+            .get_or_insert_with(|| Evaluation::new(self.init, Some(self.types.ty.clone())))
+            .resume(&self.types.structs, |name, span| cache.lookup(name, span))
+    }
+}
+
+/// Type preparation retains its own cursor: wide field/length lists must not
+/// restart when their initializer later suspends, or when another length is needed.
+struct PreparedTypes {
+    ty: ValueType,
+    structs: HashMap<String, StructDecl>,
+    lengths: Vec<ArrayLength>,
+    cursor: usize,
+    ready: bool,
+}
+
+impl PreparedTypes {
+    fn new(ty: &ValueType, declarations: &HashMap<String, StructDecl>) -> Self {
+        let mut preparation = Self {
+            ty: ty.clone(),
+            structs: HashMap::new(),
+            lengths: Vec::new(),
+            cursor: 0,
+            ready: false,
         };
-        if let Some(start) = self.visiting.iter().position(|item| item == name) {
-            let mut cycle = self.visiting[start..].to_vec();
-            cycle.push(name.to_owned());
-            return Err(Diagnostic::new(
-                format!("cyclic array-length constant: {}", cycle.join(" -> ")),
-                definition.span,
-            ));
-        }
-
-        self.visiting.push(name.to_owned());
-        let result = self.evaluate_definition(name, &definition);
-        let popped = self.visiting.pop();
-        debug_assert_eq!(popped.as_deref(), Some(name));
-        let value = match result {
-            Ok(value) => value,
-            Err(diagnostic) => {
-                self.failures.insert(name.to_owned(), diagnostic.clone());
-                return Err(diagnostic);
-            }
-        };
-        self.values.insert(name.to_owned(), value.clone());
-        Ok(value)
-    }
-
-    fn evaluate_definition(
-        &mut self,
-        name: &str,
-        definition: &ConstantDefinition,
-    ) -> Result<ConstantValue, Diagnostic> {
-        let mut ty = definition.ty.clone();
-        let mut diagnostics = Vec::new();
-        resolve_value_type(&mut ty, self, &mut diagnostics);
-        let structs = self.resolve_structs_for_type(&ty, &mut diagnostics);
-        if let Some(diagnostic) = diagnostics.into_iter().next() {
-            return Err(diagnostic);
-        }
-        let value = evaluate_typed_expression(&definition.init, &ty, &structs, |expression| {
-            evaluate_expression(expression, |name| {
-                self.evaluate_value(name, definition.init.span)
-            })
-        })?;
-        if value.ty() != ty {
-            return Err(Diagnostic::new(
-                format!(
-                    "constant `{name}` has declared type `{}`, but its initializer evaluates to `{}`",
-                    ty.name(),
-                    value.ty().name()
-                ),
-                definition.init.span,
-            ));
-        }
-        Ok(value)
-    }
-
-    fn resolve_structs_for_type(
-        &mut self,
-        ty: &ValueType,
-        diagnostics: &mut Vec<Diagnostic>,
-    ) -> HashMap<String, StructDecl> {
-        let mut structs = self.structs.clone();
-        let mut resolving = HashSet::new();
-        let mut resolved = HashSet::new();
-        self.resolve_structs_referenced_by(
-            ty,
-            &mut structs,
-            &mut resolving,
-            &mut resolved,
-            diagnostics,
-        );
-        structs
-    }
-
-    fn resolve_structs_referenced_by(
-        &mut self,
-        ty: &ValueType,
-        structs: &mut HashMap<String, StructDecl>,
-        resolving: &mut HashSet<String>,
-        resolved: &mut HashSet<String>,
-        diagnostics: &mut Vec<Diagnostic>,
-    ) {
-        match ty {
-            ValueType::Struct(name) => {
-                if resolved.contains(name) || !resolving.insert(name.clone()) {
-                    return;
+        let mut pending = vec![ty.clone()];
+        let mut seen = HashSet::new();
+        while let Some(ty) = pending.pop() {
+            collect_lengths(&ty, &mut preparation.lengths);
+            if let Some(name) = struct_name(&ty) {
+                if !seen.insert(name.to_owned()) {
+                    continue;
                 }
-                let Some(mut declaration) = structs.get(name).cloned() else {
-                    resolving.remove(name);
-                    return;
-                };
-                for field in &mut declaration.fields {
-                    resolve_value_type(&mut field.ty, self, diagnostics);
-                    self.resolve_structs_referenced_by(
-                        &field.ty,
-                        structs,
-                        resolving,
-                        resolved,
-                        diagnostics,
+                if let Some(declaration) = declarations.get(name) {
+                    pending.extend(
+                        declaration
+                            .fields
+                            .iter()
+                            .rev()
+                            .map(|field| field.ty.clone()),
                     );
+                    preparation
+                        .structs
+                        .insert(name.to_owned(), declaration.clone());
                 }
-                structs.insert(name.clone(), declaration);
-                resolving.remove(name);
-                resolved.insert(name.clone());
             }
-            ValueType::Array { element, .. } => self.resolve_structs_referenced_by(
-                element,
-                structs,
-                resolving,
-                resolved,
-                diagnostics,
-            ),
-            ValueType::I32 | ValueType::F32 | ValueType::Bool => {}
         }
+        preparation
+    }
+
+    fn resume(
+        &mut self,
+        definitions: &HashMap<String, ConstantDefinition>,
+        cache: &ConstantValues,
+    ) -> Result<(), EvaluationError> {
+        if self.ready {
+            return Ok(());
+        }
+        let mut constant = |name: &str, span: Span| {
+            require_length_type(name, span, definitions)?;
+            length_value(cache.lookup(name, span)?, name, span).map_err(Into::into)
+        };
+        while let Some(length) = self.lengths.get(self.cursor) {
+            match length {
+                ArrayLength::Literal { value, span } => {
+                    positive_array_length(*value, *span)?;
+                }
+                ArrayLength::Constant { name, span } => {
+                    positive_array_length(i64::from(constant(name, *span)?), *span)?;
+                }
+                ArrayLength::Resolved(_) | ArrayLength::Invalid => {}
+            }
+            self.cursor += 1;
+        }
+        // Every demanded length is now cached. Resolve each owned type once.
+        resolve_cached_type(&mut self.ty, &mut constant)?;
+        for declaration in self.structs.values_mut() {
+            for field in &mut declaration.fields {
+                resolve_cached_type(&mut field.ty, &mut constant)?;
+            }
+        }
+        self.ready = true;
+        Ok(())
+    }
+}
+
+fn collect_lengths(ty: &ValueType, lengths: &mut Vec<ArrayLength>) {
+    if let ValueType::Array { element, length } = ty {
+        collect_lengths(element, lengths);
+        lengths.push(length.clone());
+    }
+}
+
+/// Apply already-cached lengths to one bounded syntax type. Preparation has
+/// demanded every length before this pass; it never invokes the scheduler.
+fn resolve_cached_type(
+    ty: &mut ValueType,
+    constant: &mut impl FnMut(&str, Span) -> Result<i32, EvaluationError>,
+) -> Result<(), EvaluationError> {
+    if let ValueType::Array { element, length } = ty {
+        resolve_cached_type(element, constant)?;
+        *length = match length.clone() {
+            ArrayLength::Literal { value, span } => {
+                ArrayLength::Resolved(positive_array_length(value, span)?)
+            }
+            ArrayLength::Constant { name, span } => ArrayLength::Resolved(positive_array_length(
+                i64::from(constant(&name, span)?),
+                span,
+            )?),
+            resolved => resolved,
+        };
+    }
+    Ok(())
+}
+
+fn struct_name(mut ty: &ValueType) -> Option<&str> {
+    while let ValueType::Array { element, .. } = ty {
+        ty = element;
+    }
+    match ty {
+        ValueType::Struct(name) => Some(name),
+        _ => None,
     }
 }
 
@@ -230,7 +264,7 @@ pub(super) fn resolve_program_types(
         }
         resolve_block_types(&mut function.body, &mut evaluator, diagnostics);
     }
-    evaluator.failures.into_keys().collect()
+    evaluator.cache.into_failed_names().collect()
 }
 
 fn resolve_block_types(

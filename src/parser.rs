@@ -12,7 +12,65 @@ mod expression;
 mod limits;
 
 pub fn parse(tokens: Vec<Token>) -> Result<Program, Vec<Diagnostic>> {
-    Parser::new(tokens).run().map_err(|error| vec![error])
+    if let Some(import) = import_headers(&tokens)?.first() {
+        return Err(vec![Diagnostic::new(
+            "imports require a file path; use file-based analysis",
+            import.span,
+        )]);
+    }
+    parse_file(tokens, true, HashSet::new())
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Import {
+    pub path: String,
+    pub alias: String,
+    pub span: Span,
+}
+
+pub(crate) fn parse_file(
+    tokens: Vec<Token>,
+    root: bool,
+    imported_structs: HashSet<String>,
+) -> Result<Program, Vec<Diagnostic>> {
+    let mut parser = Parser::new(tokens);
+    parser.struct_names.extend(imported_structs);
+    parser.run(root).map_err(|error| vec![error])
+}
+
+/// Read only top-level import headers before parsing expressions. Imported
+/// struct kinds are needed to distinguish `alias::Empty {}` from `if alias::FLAG {}`.
+pub(crate) fn import_headers(tokens: &[Token]) -> Result<Vec<Import>, Vec<Diagnostic>> {
+    let mut parser = Parser::new(tokens.to_vec());
+    let mut depth = 0usize;
+    let mut imports = Vec::new();
+    while !parser.at(&TokenKind::Eof) {
+        if depth == 0 && parser.at(&TokenKind::Import) {
+            imports.push(parser.parse_import().map_err(|error| vec![error])?);
+        } else {
+            match parser.advance().kind {
+                TokenKind::LeftBrace => depth += 1,
+                TokenKind::RightBrace => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+    Ok(imports)
+}
+
+pub(crate) fn declared_struct_names(tokens: &[Token]) -> HashSet<String> {
+    tokens
+        .windows(2)
+        .filter_map(|window| {
+            if matches!(window[0].kind, TokenKind::Struct)
+                && let TokenKind::Identifier(name) = &window[1].kind
+            {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 struct Parser {
@@ -25,18 +83,7 @@ struct Parser {
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        let struct_names = tokens
-            .windows(2)
-            .filter_map(|window| {
-                if matches!(window[0].kind, TokenKind::Struct)
-                    && let TokenKind::Identifier(name) = &window[1].kind
-                {
-                    Some(name.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let struct_names = declared_struct_names(&tokens);
         Self {
             tokens,
             cursor: 0,
@@ -46,23 +93,39 @@ impl Parser {
         }
     }
 
-    fn run(mut self) -> Result<Program, Diagnostic> {
-        self.expect(&TokenKind::Game, "expected `game` at the start of the file")?;
-        let title_token = self.advance();
-        let TokenKind::String(title) = title_token.kind else {
-            return Err(Diagnostic::new(
-                "expected a quoted game title after `game`",
-                title_token.span,
-            ));
+    fn run(mut self, root: bool) -> Result<Program, Diagnostic> {
+        let (title, title_span) = if root {
+            self.expect(&TokenKind::Game, "expected `game` at the start of the file")?;
+            let title_token = self.advance();
+            let TokenKind::String(title) = title_token.kind else {
+                return Err(Diagnostic::new(
+                    "expected a quoted game title after `game`",
+                    title_token.span,
+                ));
+            };
+            self.take(&TokenKind::Semicolon);
+            (title, title_token.span)
+        } else {
+            (String::new(), self.current().span)
         };
-        self.take(&TokenKind::Semicolon);
-
         let mut structs = Vec::new();
         let mut constants = Vec::new();
         let mut globals = Vec::new();
         let mut functions = Vec::new();
         while !self.at(&TokenKind::Eof) {
-            if self.at(&TokenKind::Struct) {
+            if !root
+                && matches!(
+                    self.current().kind,
+                    TokenKind::Game | TokenKind::Start | TokenKind::Update | TokenKind::Draw
+                )
+            {
+                return Err(self.error_here(
+                    "imported files cannot declare `game`, `start`, `update`, or `draw`",
+                ));
+            }
+            if self.at(&TokenKind::Import) {
+                self.parse_import()?;
+            } else if self.at(&TokenKind::Struct) {
                 structs.push(self.parse_struct()?);
             } else if self.at(&TokenKind::Const) {
                 constants.push(self.parse_constant()?);
@@ -85,12 +148,43 @@ impl Parser {
 
         Ok(Program {
             title,
-            title_span: title_token.span,
+            title_span,
             structs,
             constants,
             globals,
             functions,
         })
+    }
+
+    fn parse_import(&mut self) -> Result<Import, Diagnostic> {
+        let start = self.expect(&TokenKind::Import, "expected `import`")?.span;
+        let path_token = self.advance();
+        let TokenKind::String(path) = path_token.kind else {
+            return Err(Diagnostic::new(
+                "expected a quoted file path after `import`",
+                path_token.span,
+            ));
+        };
+        self.expect(&TokenKind::As, "expected `as` after import path")?;
+        let (alias, end) = self.identifier("expected an import alias after `as`")?;
+        self.take(&TokenKind::Semicolon);
+        Ok(Import {
+            path,
+            alias,
+            span: start.merge(end),
+        })
+    }
+
+    fn qualified_name(&mut self, name: String, start: Span) -> Result<(String, Span), Diagnostic> {
+        if self.take(&TokenKind::ColonColon) {
+            let (member, end) = self.identifier("expected a declaration name after `::`")?;
+            if self.at(&TokenKind::ColonColon) {
+                return Err(self.error_here("qualified names use one import alias and one declaration; imports are not reexported"));
+            }
+            Ok((format!("{name}::{member}"), start.merge(end)))
+        } else {
+            Ok((name, start))
+        }
     }
 
     fn parse_struct(&mut self) -> Result<StructDecl, Diagnostic> {
@@ -258,7 +352,9 @@ impl Parser {
             TokenKind::I32 => Ok(ValueType::I32),
             TokenKind::F32 => Ok(ValueType::F32),
             TokenKind::Bool => Ok(ValueType::Bool),
-            TokenKind::Identifier(name) => Ok(ValueType::Struct(name)),
+            TokenKind::Identifier(name) => self
+                .qualified_name(name, token.span)
+                .map(|(name, _)| ValueType::Struct(name)),
             TokenKind::LeftBracket => {
                 let element = self.parse_value_type()?;
                 self.expect(
@@ -284,10 +380,10 @@ impl Parser {
                             value,
                             span: token.span,
                         },
-                        TokenKind::Identifier(name) => ArrayLength::Constant {
-                            name,
-                            span: token.span,
-                        },
+                        TokenKind::Identifier(name) => {
+                            let (name, span) = self.qualified_name(name, token.span)?;
+                            ArrayLength::Constant { name, span }
+                        }
                         _ => {
                             return Err(Diagnostic::new(
                                 "array length must be a positive integer literal or an `i32` constant",

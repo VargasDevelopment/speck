@@ -5,9 +5,11 @@ production dependency (`ctrlc`); integration tests also use `tempfile`. Generate
 games do not link Rust:
 
 ```text
-.spk source
-  -> lexer (tokens with byte spans)
-  -> parser (AST)
+.spk entry file and imports
+  -> source map and canonical file graph
+  -> lexer (tokens with source IDs and byte spans)
+  -> parser (per-file AST)
+  -> module name resolution and flattened program
   -> semantic/type validation and compile-time constant evaluation
   -> host-tagged textual LLVM emitter
   -> compatible llvm-as, or Clang-direct, validation and bitcode
@@ -26,6 +28,21 @@ construction. Both public LLVM emission entry points require `&CheckedProgram`,
 so parsing alone cannot bypass validation. Parser recursion and constructed
 expression trees share a nesting budget, with expression parsing isolated in
 `parser/expression.rs`.
+
+`analyze_path` loads the entry file and its import closure in `modules.rs`.
+The loader caches canonical file identities, rejects cycles, and reads import
+headers before full parsing so qualified empty struct literals can be distinguished
+from condition blocks. `modules/resolve.rs` resolves each file's own namespace and
+lexical locals, then combines declarations for the existing semantic passes.
+Semantic names use readable file qualifiers such as `rooms.spk::Room`; the LLVM
+backend alone quotes and escapes symbols. Dependencies reached through multiple
+aliases share one declaration, nominal type, and global storage.
+
+`source.rs` owns file paths, text, and line indexes. Every `Span` includes a
+`SourceId` with file-local byte offsets. Successful `CheckedProgram::sources()`
+and failed `AnalysisError::sources` retain the source map and attempted dependency
+paths, including missing imports, for diagnostics and editing tools. Source-string
+analysis keeps its existing convenience API; file analysis is required for imports.
 
 The LLVM backend only produces text. Tool discovery, files, subprocesses, and
 linking live in `toolchain.rs`, keeping the emitter independent of LLVM's API.
@@ -51,6 +68,23 @@ state: the early pass works with unresolved types and caches root diagnostics,
 while the later pass consumes validated declarations and skips known-invalid
 constants. Evaluated scalar and aggregate values let LLVM emit native
 initializers without runtime initialization.
+
+Both phases use the demand-driven worklist in `sema/constants/dependencies.rs`.
+A lookup returns a cached value or requests a dependency with its use span;
+it never invokes another declaration evaluator. Each active initializer retains
+its expression tasks and partial aggregate values in `constants/evaluation.rs`.
+After caching a dependency, evaluation resumes at its reference without replaying
+completed elements or operands. Only references actually reached by evaluation
+participate in cycle detection, preserving short-circuit behavior. Expression
+and declaration continuations use heap storage. Early type preparation likewise
+retains its length cursor, resolves each type once, and traverses named struct
+declarations with an explicit worklist.
+
+Aggregate construction checks resolved value depth iteratively before creating
+the parent. The shared evaluator admits at most 128 nested array/struct levels,
+including children obtained from other declarations. This bounds later recursive
+value cloning, destruction, and LLVM constant formatting independently of syntax
+and import limits; constants, globals, and early length evaluation share the rule.
 
 Struct declarations are collected before value and function checking, so type
 use and literals can refer forward within the module. Compiler-only metadata
