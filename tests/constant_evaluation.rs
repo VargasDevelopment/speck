@@ -38,6 +38,7 @@ draw {{}}
 "#
     );
     let program = speck::analyze(&source).expect("all evaluation contexts should agree");
+    let program = program.ast();
     let constant = |name| {
         program
             .constants
