@@ -5,6 +5,27 @@ use std::time::{Duration, Instant};
 fn excessive_nesting_reports_diagnostics_without_aborting() {
     const CHILD: &str = "SPECK_NESTING_TEST_CHILD";
     if std::env::var_os(CHILD).is_some() {
+        for shape in ["parentheses", "unary", "binary"] {
+            for levels in [80, 81] {
+                let expression = match shape {
+                    "parentheses" => {
+                        format!("{}1{}", "(".repeat(levels - 1), ")".repeat(levels - 1))
+                    }
+                    "unary" => format!("{}1", "-".repeat(levels - 1)),
+                    "binary" => format!("{}1", "1 + ".repeat(levels - 1)),
+                    _ => unreachable!(),
+                };
+                let source = format!(
+                    "game \"Boundary\"\nconst VALUE: i32 = {expression}\nstart {{}}\nupdate(dt: f32) {{}}\ndraw {{}}"
+                );
+                if levels == 80 {
+                    speck::compile_to_llvm(&source)
+                        .unwrap_or_else(|errors| panic!("{shape} at the limit: {errors:#?}"));
+                } else {
+                    rejects(shape, &source);
+                }
+            }
+        }
         // Test harness threads have ordinary stacks, unlike a CLI main thread
         // whose larger stack can hide a library/compiler abort.
         let expressions = [

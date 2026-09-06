@@ -18,7 +18,7 @@ pub(super) fn check_expression(expression: &Expr, nesting: usize) -> Result<(), 
     // parent is only one level deeper and can be safely dropped on the error path.
     let mut pending = vec![(expression, nesting)];
     while let Some((expression, depth)) = pending.pop() {
-        if depth >= MAX_NESTING {
+        if depth > MAX_NESTING {
             return Err(exceeded(expression.span));
         }
         let depth = depth + 1;
