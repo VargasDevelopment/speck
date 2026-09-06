@@ -18,6 +18,15 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 ```
 
+When changing the [editor extension](editors/vscode/README.md), including its
+grammar, also run the TextMate tokenization tests with Node.js 20 or newer
+(CI uses Node.js 22):
+
+```sh
+npm ci --prefix editors/vscode
+npm test --prefix editors/vscode
+```
+
 Native tests use the same host tool and SDK discovery as normal game builds;
 standalone `llvm-as` is optional. The shared [test support](tests/support/mod.rs)
 creates isolated temporary workspaces, captures subprocess output with deadlines,
