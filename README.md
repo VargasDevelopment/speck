@@ -87,6 +87,12 @@ or with Clang otherwise, compiles it with Clang, and links it with
 `runtime/crumb`. It reports the detected host, tools, validation path, and
 executable byte size when complete.
 
+The compiler embeds the CRuMB source bundle and materializes private temporary
+build inputs when compiling a game. A copied or installed `speck` binary can
+build games after its original checkout is moved or removed; the host Clang
+and linker requirements still apply. Runtime source edits take effect after
+rebuilding the compiler.
+
 The framebuffer example writes the final headless frame to `build/frame.ppm`.
 The original moving-rectangle example verifies browser and native presentation.
 `delta_rectangle.spk` expresses the same kind of sketch with named constants,
