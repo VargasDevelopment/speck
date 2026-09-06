@@ -58,9 +58,11 @@ fn sine_uses_the_existing_builtin_type_and_constant_boundaries() {
     }
 }
 
-#[cfg(target_os = "linux")]
+// The separate libm/libc sonames below are a glibc contract. The native
+// numerical test above also runs on Linux targets whose libc includes math.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
 #[test]
-fn linux_keeps_the_math_library_only_for_sine_callers() {
+fn gnu_linux_keeps_the_math_library_only_for_sine_callers() {
     for (body, uses_sine) in [("print_i32(0)", false), ("print_i32(i32(sin(1.0)))", true)] {
         let work = support::workspace();
         let source = work.path().join("dependencies.spk");
