@@ -8,11 +8,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::{compile_to_llvm_for_target, dev, render_diagnostics, toolchain};
+use crate::{analyze, compile_to_llvm_for_target, dev, render_diagnostics, toolchain};
 
 pub fn run(args: impl IntoIterator<Item = OsString>) -> ExitCode {
     let args: Vec<OsString> = args.into_iter().collect();
     match args.as_slice() {
+        [_program, command, source] if command == "check" => check(Path::new(source)),
         [_program, command, source] if command == "build" => build(Path::new(source)),
         [_program, command, rest @ ..] if command == "dev" => development(rest),
         [_program, command, rest @ ..] if command == "run" => native(rest),
@@ -26,11 +27,28 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> ExitCode {
         }
         _ => {
             eprintln!(
-                "error: expected `speck build <game.spk>`, `speck dev <game.spk>`, or `speck run \
-                 <game.spk>`\n"
+                "error: expected `speck check <game.spk>`, `speck build <game.spk>`, \
+                 `speck dev <game.spk>`, or `speck run <game.spk>`\n"
             );
             print_help();
             ExitCode::from(2)
+        }
+    }
+}
+
+fn check(path: &Path) -> ExitCode {
+    let source = match read_source(path) {
+        Ok(source) => source,
+        Err(status) => return status,
+    };
+    match analyze(&source) {
+        Ok(_) => {
+            println!("Checked: {}", display_path(path).display());
+            ExitCode::SUCCESS
+        }
+        Err(diagnostics) => {
+            eprintln!("{}", render_diagnostics(path, &source, &diagnostics));
+            ExitCode::FAILURE
         }
     }
 }
@@ -48,16 +66,9 @@ fn native(args: &[OsString]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if path.extension().and_then(|extension| extension.to_str()) != Some("spk") {
-        eprintln!("error: Speck source files must use the `.spk` extension");
-        return ExitCode::from(2);
-    }
-    let source = match fs::read_to_string(&path) {
+    let source = match read_source(&path) {
         Ok(source) => source,
-        Err(error) => {
-            eprintln!("error: could not read `{}`: {error}", path.display());
-            return ExitCode::FAILURE;
-        }
+        Err(status) => return status,
     };
     let host_target = match toolchain::HostTarget::detect() {
         Ok(target) => target,
@@ -247,16 +258,9 @@ fn development(args: &[OsString]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if path.extension().and_then(|extension| extension.to_str()) != Some("spk") {
-        eprintln!("error: Speck source files must use the `.spk` extension");
-        return ExitCode::from(2);
-    }
-    let source = match fs::read_to_string(&path) {
+    let source = match read_source(&path) {
         Ok(source) => source,
-        Err(error) => {
-            eprintln!("error: could not read `{}`: {error}", path.display());
-            return ExitCode::FAILURE;
-        }
+        Err(status) => return status,
     };
     let host_target = match toolchain::HostTarget::detect() {
         Ok(target) => target,
@@ -343,16 +347,9 @@ fn parse_dev_args(args: &[OsString]) -> Result<(PathBuf, dev::Options), String> 
 }
 
 fn build(path: &Path) -> ExitCode {
-    if path.extension().and_then(|extension| extension.to_str()) != Some("spk") {
-        eprintln!("error: Speck source files must use the `.spk` extension");
-        return ExitCode::from(2);
-    }
-    let source = match fs::read_to_string(path) {
+    let source = match read_source(path) {
         Ok(source) => source,
-        Err(error) => {
-            eprintln!("error: could not read `{}`: {error}", path.display());
-            return ExitCode::FAILURE;
-        }
+        Err(status) => return status,
     };
     let host_target = match toolchain::HostTarget::detect() {
         Ok(target) => target,
@@ -398,6 +395,17 @@ fn build(path: &Path) -> ExitCode {
     }
 }
 
+fn read_source(path: &Path) -> Result<String, ExitCode> {
+    if path.extension().and_then(|extension| extension.to_str()) != Some("spk") {
+        eprintln!("error: Speck source files must use the `.spk` extension");
+        return Err(ExitCode::from(2));
+    }
+    fs::read_to_string(path).map_err(|error| {
+        eprintln!("error: could not read `{}`: {error}", path.display());
+        ExitCode::FAILURE
+    })
+}
+
 fn display_path(path: &Path) -> PathBuf {
     path.strip_prefix(std::env::current_dir().unwrap_or_default())
         .unwrap_or(path)
@@ -406,7 +414,7 @@ fn display_path(path: &Path) -> PathBuf {
 
 fn print_help() {
     println!(
-        "Speck — a tiny language for tiny games.\n\nUsage:\n  speck build <game.spk>\n  speck dev <game.spk> [--bind IP] [--port PORT] [--frames COUNT]\n  speck run <game.spk> [--frames COUNT]\n\nCommands:\n  build    Check, compile, and link a game with headless/PPM CRuMB\n  dev      Run a native game with the development browser presenter\n  run      Build and run a game with the native macOS Cocoa presenter"
+        "Speck — a tiny language for tiny games.\n\nUsage:\n  speck check <game.spk>\n  speck build <game.spk>\n  speck dev <game.spk> [--bind IP] [--port PORT] [--frames COUNT]\n  speck run <game.spk> [--frames COUNT]\n\nCommands:\n  check    Check source without native tools or build artifacts\n  build    Check, compile, and link a game with headless/PPM CRuMB\n  dev      Run a native game with the development browser presenter\n  run      Build and run a game with the native macOS Cocoa presenter"
     );
 }
 
