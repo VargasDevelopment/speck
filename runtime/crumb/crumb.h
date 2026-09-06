@@ -25,6 +25,7 @@ float crumb_frame_delta(void);
 float crumb_sin(float angle);
 void crumb_print_i32(int value);
 void crumb_debug_frame(int frame, float value);
+void crumb_source_location(const char *path, int line, int column);
 void crumb_bounds_fail(int index, int length);
 void crumb_division_fail(int dividend, int divisor);
 void crumb_remainder_fail(int dividend, int divisor);

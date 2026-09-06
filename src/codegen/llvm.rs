@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
+use super::runtime_diagnostics::RuntimeDiagnostics;
 use crate::CheckedProgram;
 use crate::ast::{
     ArrayLength, AssignOp, BinaryOp, Block, ConstantValue, Expr, ExprKind, Function, FunctionKind,
     Program, ReturnType, Stmt, StmtKind, StructDecl, UnaryOp, ValueType,
 };
 use crate::builtins;
+use crate::diagnostic::Span;
 
 #[derive(Clone)]
 struct Signature {
@@ -63,6 +65,24 @@ pub fn emit(program: &CheckedProgram) -> String {
 /// speck::codegen::llvm::emit_for_target(&program, Some("aarch64-apple-darwin"));
 /// ```
 pub fn emit_for_target(program: &CheckedProgram, target_triple: Option<&str>) -> String {
+    emit_program(program, target_triple, RuntimeDiagnostics::Plain)
+}
+
+/// Emit runtime guard failures with their original Speck file, line and column.
+/// Ordinary emission omits source paths and location reporting entirely.
+pub fn emit_for_development(program: &CheckedProgram, target_triple: Option<&str>) -> String {
+    emit_program(
+        program,
+        target_triple,
+        RuntimeDiagnostics::Located(program.sources()),
+    )
+}
+
+fn emit_program(
+    program: &CheckedProgram,
+    target_triple: Option<&str>,
+    diagnostics: RuntimeDiagnostics<'_>,
+) -> String {
     let program = program.ast();
     let functions = function_signatures(program);
     let structs = program
@@ -140,6 +160,7 @@ pub fn emit_for_target(program: &CheckedProgram, target_triple: Option<&str>) ->
         )
         .expect("writing to a string cannot fail");
     }
+    output.push_str(&diagnostics.declarations());
     output.push_str("declare void @crumb_bounds_fail(i32, i32)\n");
     output.push_str("declare void @crumb_division_fail(i32, i32)\n");
     output.push_str("declare void @crumb_remainder_fail(i32, i32)\n");
@@ -203,7 +224,14 @@ pub fn emit_for_target(program: &CheckedProgram, target_triple: Option<&str>) ->
     }
 
     for function in &program.functions {
-        let emitter = FunctionEmitter::new(function, &globals, &constants, &structs, &functions);
+        let emitter = FunctionEmitter::new(
+            function,
+            &globals,
+            &constants,
+            &structs,
+            &functions,
+            diagnostics,
+        );
         output.push_str(&emitter.emit());
         output.push('\n');
     }
@@ -252,6 +280,7 @@ struct FunctionEmitter<'a> {
     constants: &'a HashMap<String, ConstantValue>,
     structs: &'a HashMap<String, StructDecl>,
     functions: &'a HashMap<String, Signature>,
+    diagnostics: RuntimeDiagnostics<'a>,
     scopes: Vec<HashMap<String, Variable>>,
     lines: Vec<String>,
     next_temp: usize,
@@ -267,6 +296,7 @@ impl<'a> FunctionEmitter<'a> {
         constants: &'a HashMap<String, ConstantValue>,
         structs: &'a HashMap<String, StructDecl>,
         functions: &'a HashMap<String, Signature>,
+        diagnostics: RuntimeDiagnostics<'a>,
     ) -> Self {
         Self {
             function,
@@ -274,6 +304,7 @@ impl<'a> FunctionEmitter<'a> {
             constants,
             structs,
             functions,
+            diagnostics,
             scopes: vec![HashMap::new()],
             lines: Vec::new(),
             next_temp: 0,
@@ -395,7 +426,7 @@ impl<'a> FunctionEmitter<'a> {
                         AssignOp::Remainder => BinaryOp::Remainder,
                         AssignOp::Set => unreachable!(),
                     };
-                    self.binary(left, binary_op, right)
+                    self.binary(left, binary_op, right, target.span)
                 };
                 self.instruction(format!(
                     "store {} {}, ptr {}",
@@ -621,7 +652,7 @@ impl<'a> FunctionEmitter<'a> {
                 let element_type = element_type.clone();
                 let array_type = llvm_value_type(&base.ty);
                 let index = self.expression(index);
-                self.bounds_check(&index.repr, length);
+                self.bounds_check(&index.repr, length, expression.span);
                 let pointer = self.temp();
                 self.instruction(format!(
                     "{pointer} = getelementptr inbounds {array_type}, ptr {}, i32 0, i32 {}",
@@ -659,7 +690,7 @@ impl<'a> FunctionEmitter<'a> {
         }
     }
 
-    fn bounds_check(&mut self, index: &str, length: usize) {
+    fn bounds_check(&mut self, index: &str, length: usize, span: Span) {
         let nonnegative = self.temp();
         self.instruction(format!("{nonnegative} = icmp sge i32 {index}, 0"));
         let below_length = self.temp();
@@ -673,6 +704,9 @@ impl<'a> FunctionEmitter<'a> {
         ));
 
         self.place_label(&failure_label);
+        if let Some(location) = self.diagnostics.instruction(span) {
+            self.instruction(location);
+        }
         self.instruction(format!(
             "call void @crumb_bounds_fail(i32 {index}, i32 {length})"
         ));
@@ -737,7 +771,7 @@ impl<'a> FunctionEmitter<'a> {
                     let storage = self.entry_alloca(&array_type);
                     self.instruction(format!("store {array_type} {}, ptr {storage}", base.repr));
                     let index = self.expression(index);
-                    self.bounds_check(&index.repr, length);
+                    self.bounds_check(&index.repr, length, expression.span);
                     let pointer = self.temp();
                     self.instruction(format!(
                         "{pointer} = getelementptr inbounds {array_type}, ptr {storage}, i32 0, i32 {}",
@@ -834,7 +868,7 @@ impl<'a> FunctionEmitter<'a> {
                 } else {
                     let left = self.expression(left);
                     let right = self.expression(right);
-                    self.binary(left, *op, right)
+                    self.binary(left, *op, right, expression.span)
                 }
             }
             ExprKind::Call { name, args } => {
@@ -996,11 +1030,11 @@ impl<'a> FunctionEmitter<'a> {
         }
     }
 
-    fn binary(&mut self, left: Value, op: BinaryOp, right: Value) -> Value {
+    fn binary(&mut self, left: Value, op: BinaryOp, right: Value, span: Span) -> Value {
         let left_type = left.value_type();
         let is_float = left_type == ValueType::F32;
         if matches!(op, BinaryOp::Divide | BinaryOp::Remainder) && !is_float {
-            return self.checked_i32_division(left, op, right);
+            return self.checked_i32_division(left, op, right, span);
         }
         let temp = self.temp();
         let (instruction, result_type) = match op {
@@ -1047,7 +1081,13 @@ impl<'a> FunctionEmitter<'a> {
         }
     }
 
-    fn checked_i32_division(&mut self, left: Value, op: BinaryOp, right: Value) -> Value {
+    fn checked_i32_division(
+        &mut self,
+        left: Value,
+        op: BinaryOp,
+        right: Value,
+        span: Span,
+    ) -> Value {
         let (mnemonic, fail_hook, stage) = match op {
             BinaryOp::Divide => ("sdiv", "crumb_division_fail", "division"),
             BinaryOp::Remainder => ("srem", "crumb_remainder_fail", "remainder"),
@@ -1080,6 +1120,9 @@ impl<'a> FunctionEmitter<'a> {
         ));
 
         self.place_label(&failure_label);
+        if let Some(location) = self.diagnostics.instruction(span) {
+            self.instruction(location);
+        }
         self.instruction(format!(
             "call void @{fail_hook}(i32 {}, i32 {})",
             left.repr, right.repr

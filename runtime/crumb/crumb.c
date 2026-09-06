@@ -118,6 +118,10 @@ float crumb_frame_delta(void) { return 1.0f / 60.0f; }
 
 float crumb_sin(float angle) { return sinf(angle); }
 
+void crumb_source_location(const char *path, int line, int column) {
+    fprintf(stderr, "%s:%d:%d: ", path, line, column);
+}
+
 void crumb_print_i32(int value) { printf("%d\n", value); }
 
 void crumb_debug_frame(int frame, float value) { printf("frame %d: %.3f\n", frame, (double)value); }
