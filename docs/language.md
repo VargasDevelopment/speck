@@ -69,6 +69,12 @@ conversions, so this is invalid:
 let x: f32 = 10
 ```
 
+`i32` is a signed 32-bit integer with range `-2147483648..2147483647`
+(both endpoints included). Integer literals must fit that range; the negative
+endpoint is accepted as `-2147483648`. `f32` is an IEEE 754 single-precision
+floating-point value. Decimal floating literals are rounded to `f32` and must
+remain finite; literals that overflow to infinity are rejected.
+
 `void` is a return type, not a value type. A `void` function may fall through
 its final block or use bare `return` for an early exit. It may not return an
 expression. A non-void function must return a value of its declared type on
@@ -242,13 +248,18 @@ let velocity: f32 = f32(120)
 
 - `f32(i32_value)` performs signed integer-to-floating conversion. Large
   integers may be rounded because not every `i32` is exactly representable as
-  `f32`.
+  `f32`; for example, `f32(16777217)` rounds to `16777216.0`.
 - `i32(f32_value)` truncates finite, in-range values toward zero, clamps values
-  at or above the positive boundary to `2147483647`, clamps values at or below
-  the negative boundary to `-2147483648`, and converts NaN to zero.
+  at or above `2147483648.0` (including positive infinity) to `2147483647`,
+  clamps values at or below `-2147483648.0` (including negative infinity) to
+  `-2147483648`, and converts NaN to zero.
 - Same-type conversions such as `i32(i32_value)` and `f32(f32_value)` are
   accepted no-ops.
 - Boolean/number and void/number conversions are invalid.
+
+These conversion rules also apply in constant expressions, but their operands
+must first evaluate successfully: `i32(1.0 / 0.0)` is rejected in a top-level
+initializer before conversion can clamp the result.
 
 The LLVM lowering checks NaN and both bounds before placing `fptosi` on the
 in-range-only control-flow path, avoiding poison-producing out-of-range LLVM
@@ -269,9 +280,12 @@ const DEBUG: bool = false
 Constant expressions support numeric and Boolean literals, unary `-` and `!`,
 other constants, arithmetic, comparisons, equality, `&&`, `||`, parentheses,
 and explicit numeric conversions. They cannot call functions, reference
-mutable globals or runtime values, or use `void`. Integer arithmetic is checked
-for overflow. Non-finite floating results, division or remainder by zero, and invalid
-conversions are diagnosed at the initializer.
+mutable globals or runtime values, or use `void`. Integer `+`, `-`, `*`, `/`,
+`%`, and unary negation are checked for overflow. Every evaluated floating
+arithmetic result must remain finite. Overflow, division by zero (including
+floating positive or negative zero), integer remainder by zero, and invalid
+conversions are diagnosed at the initializer. These checks apply to intermediate
+results, even when a later operation would bring the final value back in range.
 
 Dependencies are evaluated after all constant names have been collected.
 Cycles are rejected with the participating names in dependency order.
@@ -290,6 +304,12 @@ runtime initialized.
 Arithmetic and ordering work on same-typed `i32` or `f32` operands, except
 that `%` (remainder) requires `i32`. Equality
 works on matching numeric or Boolean operands. Conditions must be `bool`.
+Runtime `i32` addition, subtraction, multiplication, and unary negation wrap
+modulo 2^32 and interpret the result as signed: `2147483647 + 1` becomes
+`-2147483648`, and negating `-2147483648` leaves it unchanged. This also applies
+to compound assignments and local initializers, even when their operands are
+literals. Top-level initializers instead use the checked constant rules above.
+
 `i32` division is signed integer division with truncation toward zero, and
 `i32` remainder takes the sign of the dividend, so `-7 % 3` is `-1` and
 `7 % -3` is `1`. A runtime divisor of zero and the
@@ -299,10 +319,14 @@ diagnostic; the same two cases for `%` terminate through the parallel
 `crumb_remainder_fail(dividend, divisor)` hook. The guard executes after both operands have been evaluated and
 before LLVM emits `sdiv` or `srem`, so invalid division never reaches LLVM undefined
 behavior. This failure edge is deliberately isolated; it is not an exception
-system and may be replaced if Speck later gains one. Unary floating-point
-negation preserves the IEEE sign, including negative zero. Floating comparisons
-are ordered, so comparisons involving NaN are false; source floating literals
-must be finite.
+system and may be replaced if Speck later gains one.
+
+Runtime `f32` arithmetic can produce infinity or NaN, including through overflow
+or division by zero; it does not use the integer failure hooks. Unary
+floating-point negation preserves the IEEE sign, including negative zero.
+All six floating comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`) are ordered:
+if either operand is NaN, the result is false, **including `!=`**. Positive and
+negative zero compare equal.
 
 Boolean precedence, from lowest to highest, is `||`, `&&`, equality,
 comparison, arithmetic, unary, and primary expressions. Both operands of `&&`
