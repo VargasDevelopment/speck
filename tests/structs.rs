@@ -1,6 +1,9 @@
+pub mod support;
+
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
+use std::process::Command;
+use support::{assert_success, build_in};
 
 #[test]
 fn structs_lower_to_named_fixed_layout_values() {
@@ -120,13 +123,10 @@ draw {}
 #[test]
 fn platform_value_example_builds_verifies_and_executes() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join("target/platform_value_e2e");
-    fs::create_dir_all(&work).expect("struct test directory should exist");
-    let executable = build_in(&work, &root.join("examples/platform_value.spk"));
-    let run = Command::new(executable)
-        .current_dir(&work)
-        .output()
-        .expect("struct example should start");
+    let directory = support::workspace();
+    let work = directory.path();
+    let executable = build_in(work, &root.join("examples/platform_value.spk"));
+    let run = support::run(Command::new(executable).current_dir(work));
     assert_success("struct example", &run);
     assert_eq!(String::from_utf8_lossy(&run.stdout), "40\n45\n");
 
@@ -139,12 +139,10 @@ fn platform_value_example_builds_verifies_and_executes() {
     assert_eq!(pixel(45, 140), [255, 255, 255]);
     assert_eq!(pixel(44, 140), [32, 18, 32]);
 
-    let verify = Command::new("llvm-as")
-        .arg(work.join("build/platform_value.ll"))
-        .arg("-o")
-        .arg(work.join("verified.bc"))
-        .output()
-        .expect("llvm-as should start");
+    let verify = support::verify_ir(
+        &(work.join("build/platform_value.ll")),
+        &(work.join("verified.bc")),
+    );
     assert_success("struct LLVM verification", &verify);
 }
 
@@ -153,26 +151,5 @@ fn assert_error(source: &str, expected: &str) {
     assert!(
         errors.iter().any(|error| error.message.contains(expected)),
         "expected diagnostic containing {expected:?}, found: {errors:#?}"
-    );
-}
-
-fn build_in(work: &Path, source: &Path) -> PathBuf {
-    let build = Command::new(env!("CARGO_BIN_EXE_speck"))
-        .current_dir(work)
-        .args(["build"])
-        .arg(source)
-        .output()
-        .expect("Speck compiler should start");
-    assert_success("struct build", &build);
-    let stem = source.file_stem().expect("source should have a file stem");
-    work.join("build").join(stem)
-}
-
-fn assert_success(description: &str, output: &Output) {
-    assert!(
-        output.status.success(),
-        "{description} failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
     );
 }

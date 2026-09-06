@@ -1,5 +1,7 @@
+pub mod support;
+
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[test]
 fn excessive_nesting_reports_diagnostics_without_aborting() {
@@ -89,31 +91,17 @@ fn excessive_nesting_reports_diagnostics_without_aborting() {
         return;
     }
 
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "excessive_nesting_reports_diagnostics_without_aborting",
-            "--nocapture",
-        ])
-        .env(CHILD, "1")
-        .spawn()
-        .expect("nesting regression subprocess should start");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            assert!(
-                status.success(),
-                "nesting regression subprocess failed: {status}"
-            );
-            break;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("nesting regression subprocess exceeded ten seconds");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    let output = support::run_with_timeout(
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "excessive_nesting_reports_diagnostics_without_aborting",
+                "--nocapture",
+            ])
+            .env(CHILD, "1"),
+        Duration::from_secs(10),
+    );
+    support::assert_success("nesting regression subprocess", &output);
 }
 
 fn rejects(name: &str, source: &str) {

@@ -1,6 +1,9 @@
+pub mod support;
+
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
+use support::{assert_success, build_in};
 
 #[test]
 fn accepted_feature_interactions_emit_verifiable_llvm() {
@@ -131,9 +134,8 @@ draw {}
         ),
     ];
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join("target/semantic_contract_ir");
-    fs::create_dir_all(&work).expect("semantic contract IR directory should exist");
+    let directory = support::workspace();
+    let work = directory.path();
 
     for (name, source) in cases {
         let ir = speck::compile_to_llvm(source).unwrap_or_else(|diagnostics| {
@@ -144,12 +146,7 @@ draw {}
         });
         let path = work.join(format!("{name}.ll"));
         fs::write(&path, ir).expect("semantic contract IR should write");
-        let verify = Command::new("llvm-as")
-            .arg(&path)
-            .arg("-o")
-            .arg(work.join(format!("{name}.bc")))
-            .output()
-            .expect("llvm-as should start");
+        let verify = support::verify_ir(&path, &(work.join(format!("{name}.bc"))));
         assert_success(name, &verify);
     }
 }
@@ -473,9 +470,7 @@ draw {}
 
 #[test]
 fn float_negation_preserves_negative_zero_for_locals_and_constants() {
-    let output = run_source(
-        "negative_zero",
-        r#"game "Negative Zero"
+    let source = r#"game "Negative Zero"
 const NEGATIVE_ZERO: f32 = -0.0
 start {
     let local: f32 = -0.0
@@ -484,51 +479,28 @@ start {
 }
 update(dt: f32) {}
 draw {}
-"#,
-    );
+"#;
+    let directory = support::workspace();
+    let work = directory.path();
+    let source_path = work.join("negative_zero.spk");
+    fs::write(&source_path, source).unwrap();
+    let executable = build_in(work, &source_path);
+    let output = support::run(Command::new(executable).current_dir(work));
     assert_success("negative zero", &output);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "frame 1: -inf\nframe 2: -inf\n"
     );
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let ir = fs::read_to_string(
-        root.join("target/semantic_contract_native/negative_zero/build/negative_zero.ll"),
-    )
-    .expect("negative-zero IR should be inspectable");
+    let ir = fs::read_to_string(work.join("build/negative_zero.ll"))
+        .expect("negative-zero IR should be inspectable");
     assert!(ir.contains("fneg float"));
 }
 
 fn run_source(name: &str, source: &str) -> Output {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join("target/semantic_contract_native").join(name);
-    fs::create_dir_all(&work).expect("semantic contract directory should exist");
+    let directory = support::workspace();
+    let work = directory.path();
     let source_path = work.join(format!("{name}.spk"));
     fs::write(&source_path, source).expect("semantic contract source should write");
-    let executable = build_in(&work, &source_path);
-    Command::new(executable)
-        .current_dir(&work)
-        .output()
-        .expect("semantic contract executable should start")
-}
-
-fn build_in(work: &Path, source: &Path) -> PathBuf {
-    let build = Command::new(env!("CARGO_BIN_EXE_speck"))
-        .current_dir(work)
-        .args(["build"])
-        .arg(source)
-        .output()
-        .expect("Speck compiler should start");
-    assert_success("semantic contract build", &build);
-    let stem = source.file_stem().expect("source should have a stem");
-    work.join("build").join(stem)
-}
-
-fn assert_success(description: &str, output: &Output) {
-    assert!(
-        output.status.success(),
-        "{description} failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let executable = build_in(work, &source_path);
+    support::run(Command::new(executable).current_dir(work))
 }

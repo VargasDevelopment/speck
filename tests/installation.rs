@@ -1,13 +1,15 @@
+pub mod support;
+
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::process::{Command, Output};
+use std::time::Duration;
 
 #[test]
 fn installed_compiler_builds_without_its_source_tree() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join(format!("target/installation-{}", std::process::id()));
+    let directory = support::workspace();
+    let work = directory.path();
     let source = work.join("source");
     fs::create_dir_all(&source).unwrap();
     for name in ["Cargo.toml", "Cargo.lock"] {
@@ -20,11 +22,7 @@ fn installed_compiler_builds_without_its_source_tree() {
     // This test executes the resulting compiler, so build explicitly for the
     // Rust host even when Cargo has a configured default build target.
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let version = run(
-        Command::new(rustc).arg("-vV"),
-        &work,
-        Duration::from_secs(5),
-    );
+    let version = run(Command::new(rustc).arg("-vV"), Duration::from_secs(5));
     let version = String::from_utf8(version.stdout).unwrap();
     let host = version
         .lines()
@@ -43,7 +41,6 @@ fn installed_compiler_builds_without_its_source_tree() {
             ])
             .arg(&target)
             .args(["--target", host]),
-        &work,
         Duration::from_secs(120),
     );
     let installed = work.join("speck");
@@ -60,22 +57,19 @@ fn installed_compiler_builds_without_its_source_tree() {
     .unwrap();
     run(
         Command::new(&installed)
-            .current_dir(&work)
+            .current_dir(work)
             .args(["build", "game.spk"]),
-        &work,
         Duration::from_secs(15),
     );
     let output = run(
-        Command::new(work.join("build/game")).current_dir(&work),
-        &work,
+        Command::new(work.join("build/game")).current_dir(work),
         Duration::from_secs(5),
     );
     assert_eq!(output.stdout, b"42\n");
     let output = run(
         Command::new(&installed)
-            .current_dir(&work)
+            .current_dir(work)
             .args(["dev", "--frames", "1", "--port", "0", "game.spk"]),
-        &work,
         Duration::from_secs(15),
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("Frames received: 1"));
@@ -86,7 +80,6 @@ fn installed_compiler_builds_without_its_source_tree() {
             .to_string_lossy()
             .starts_with(".crumb-sources-")
     }));
-    fs::remove_dir_all(&work).unwrap();
 }
 
 fn copy_directory(source: &Path, destination: &Path) {
@@ -102,38 +95,8 @@ fn copy_directory(source: &Path, destination: &Path) {
     }
 }
 
-fn run(command: &mut Command, work: &Path, timeout: Duration) -> Output {
-    static NEXT_LOG: AtomicUsize = AtomicUsize::new(0);
-    let id = NEXT_LOG.fetch_add(1, Ordering::Relaxed);
-    let stdout = work.join(format!("stdout-{id}.log"));
-    let stderr = work.join(format!("stderr-{id}.log"));
-    let mut child = command
-        .stdout(Stdio::from(fs::File::create(&stdout).unwrap()))
-        .stderr(Stdio::from(fs::File::create(&stderr).unwrap()))
-        .spawn()
-        .expect("installation command should start");
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("installation command timed out: {command:?}");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    let output = Output {
-        status,
-        stdout: fs::read(stdout).unwrap(),
-        stderr: fs::read(stderr).unwrap(),
-    };
-    assert!(
-        status.success(),
-        "{command:?} failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+fn run(command: &mut Command, timeout: Duration) -> Output {
+    let output = support::run_with_timeout(command, timeout);
+    support::assert_success("installation command", &output);
     output
 }

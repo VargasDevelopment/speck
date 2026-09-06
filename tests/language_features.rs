@@ -1,6 +1,9 @@
+pub mod support;
+
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
+use std::process::Command;
+use support::{assert_success, build_in};
 
 const WIDTH: usize = 320;
 const CHANNELS: usize = 3;
@@ -9,14 +12,11 @@ const PPM_HEADER: &[u8] = b"P6\n320 180\n255\n";
 #[test]
 fn delta_rectangle_executes_with_short_circuiting_and_expected_pixels() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join("target/language_delta_e2e");
-    fs::create_dir_all(&work).expect("test working directory should be created");
-    let executable = build_in(&work, &root.join("examples/delta_rectangle.spk"));
+    let directory = support::workspace();
+    let work = directory.path();
+    let executable = build_in(work, &root.join("examples/delta_rectangle.spk"));
 
-    let run = Command::new(executable)
-        .current_dir(&work)
-        .output()
-        .expect("delta rectangle should start");
+    let run = support::run(Command::new(executable).current_dir(work));
     assert_success("delta rectangle", &run);
     assert_eq!(
         run.stdout, b"",
@@ -38,9 +38,8 @@ fn delta_rectangle_executes_with_short_circuiting_and_expected_pixels() {
 
 #[test]
 fn safe_float_to_integer_conversion_executes_at_boundaries() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join("target/conversion_e2e");
-    fs::create_dir_all(&work).expect("test working directory should be created");
+    let directory = support::workspace();
+    let work = directory.path();
     let source = work.join("conversion_boundaries.spk");
     fs::write(
         &source,
@@ -67,12 +66,9 @@ draw {}
 "#,
     )
     .expect("test source should be written");
-    let executable = build_in(&work, &source);
+    let executable = build_in(work, &source);
 
-    let run = Command::new(executable)
-        .current_dir(&work)
-        .output()
-        .expect("conversion executable should start");
+    let run = support::run(Command::new(executable).current_dir(work));
     assert_success("conversion executable", &run);
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
@@ -80,32 +76,9 @@ draw {}
     );
 }
 
-fn build_in(work: &Path, source: &Path) -> PathBuf {
-    let build = Command::new(env!("CARGO_BIN_EXE_speck"))
-        .current_dir(work)
-        .args(["build"])
-        .arg(source)
-        .output()
-        .expect("Speck compiler should start");
-    assert_success("language feature build", &build);
-    let stem = source
-        .file_stem()
-        .expect("test source should have a file stem");
-    work.join("build").join(stem)
-}
-
 fn pixel(ppm: &[u8], x: usize, y: usize) -> [u8; CHANNELS] {
     let offset = PPM_HEADER.len() + (y * WIDTH + x) * CHANNELS;
     ppm[offset..offset + CHANNELS]
         .try_into()
         .expect("pixel should contain three channels")
-}
-
-fn assert_success(description: &str, output: &Output) {
-    assert!(
-        output.status.success(),
-        "{description} failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }

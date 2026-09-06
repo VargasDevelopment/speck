@@ -1,6 +1,9 @@
+pub mod support;
+
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::Path;
+use std::process::Command;
+use support::{assert_success, build_in};
 
 #[test]
 fn nested_aggregates_lower_through_one_composable_path() {
@@ -41,16 +44,12 @@ draw {}
     assert!(ir.contains("@spk_const_BASE = internal constant [2 x %spk_struct_Platform]"));
     assert!(ir.matches("getelementptr inbounds").count() >= 10);
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join("target/aggregate_composition_e2e");
-    fs::create_dir_all(&work).expect("aggregate test directory should exist");
+    let directory = support::workspace();
+    let work = directory.path();
     let path = work.join("aggregate_values.spk");
     fs::write(&path, source).expect("aggregate source should be written");
-    let executable = build_in(&work, &path);
-    let run = Command::new(executable)
-        .current_dir(&work)
-        .output()
-        .expect("aggregate example should start");
+    let executable = build_in(work, &path);
+    let run = support::run(Command::new(executable).current_dir(work));
     assert_success("aggregate value example", &run);
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
@@ -105,16 +104,12 @@ draw {}
     assert!(scratch < loop_condition, "scratch storage must be hoisted");
     assert!(ir.contains("getelementptr inbounds [2 x i32]"));
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join("target/aggregate_rvalue_index");
-    fs::create_dir_all(&work).expect("rvalue index directory should exist");
+    let directory = support::workspace();
+    let work = directory.path();
     let path = work.join("rvalue_index.spk");
     fs::write(&path, source).expect("rvalue index source should be written");
-    let executable = build_in(&work, &path);
-    let run = Command::new(executable)
-        .current_dir(&work)
-        .output()
-        .expect("rvalue index example should start");
+    let executable = build_in(work, &path);
+    let run = support::run(Command::new(executable).current_dir(work));
     assert_success("aggregate rvalue indexing", &run);
     assert_eq!(String::from_utf8_lossy(&run.stdout), "9\n9\n");
 }
@@ -146,9 +141,8 @@ draw {}
 
 #[test]
 fn struct_array_bounds_checks_fail_at_runtime() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join("target/struct_array_bounds");
-    fs::create_dir_all(&work).expect("bounds directory should exist");
+    let directory = support::workspace();
+    let work = directory.path();
     let path = work.join("struct_bounds.spk");
     fs::write(
         &path,
@@ -162,11 +156,8 @@ draw {}
 "#,
     )
     .expect("bounds source should be written");
-    let executable = build_in(&work, &path);
-    let run = Command::new(executable)
-        .current_dir(&work)
-        .output()
-        .expect("bounds example should start");
+    let executable = build_in(work, &path);
+    let run = support::run(Command::new(executable).current_dir(work));
     assert!(!run.status.success(), "out-of-bounds access must fail");
     assert_eq!(
         String::from_utf8_lossy(&run.stderr),
@@ -177,13 +168,10 @@ draw {}
 #[test]
 fn platform_array_example_builds_verifies_and_renders() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join("target/platform_array_e2e");
-    fs::create_dir_all(&work).expect("platform array directory should exist");
-    let executable = build_in(&work, &root.join("examples/platform_array.spk"));
-    let run = Command::new(executable)
-        .current_dir(&work)
-        .output()
-        .expect("platform array should start");
+    let directory = support::workspace();
+    let work = directory.path();
+    let executable = build_in(work, &root.join("examples/platform_array.spk"));
+    let run = support::run(Command::new(executable).current_dir(work));
     assert_success("platform array", &run);
 
     let ppm = fs::read(work.join("build/frame.ppm")).expect("frame should be written");
@@ -197,12 +185,10 @@ fn platform_array_example_builds_verifies_and_renders() {
     assert_eq!(pixel(240, 70), [255, 255, 255]);
     assert_eq!(pixel(39, 140), [32, 18, 32]);
 
-    let verify = Command::new("llvm-as")
-        .arg(work.join("build/platform_array.ll"))
-        .arg("-o")
-        .arg(work.join("verified.bc"))
-        .output()
-        .expect("llvm-as should start");
+    let verify = support::verify_ir(
+        &(work.join("build/platform_array.ll")),
+        &(work.join("verified.bc")),
+    );
     assert_success("aggregate LLVM verification", &verify);
 }
 
@@ -211,26 +197,5 @@ fn assert_error(source: &str, expected: &str) {
     assert!(
         errors.iter().any(|error| error.message.contains(expected)),
         "expected diagnostic containing {expected:?}, found: {errors:#?}"
-    );
-}
-
-fn build_in(work: &Path, source: &Path) -> PathBuf {
-    let build = Command::new(env!("CARGO_BIN_EXE_speck"))
-        .current_dir(work)
-        .args(["build"])
-        .arg(source)
-        .output()
-        .expect("Speck compiler should start");
-    assert_success("aggregate build", &build);
-    let stem = source.file_stem().expect("source should have a file stem");
-    work.join("build").join(stem)
-}
-
-fn assert_success(description: &str, output: &Output) {
-    assert!(
-        output.status.success(),
-        "{description} failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
     );
 }

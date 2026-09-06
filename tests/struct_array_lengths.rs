@@ -1,7 +1,9 @@
+pub mod support;
+
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Command;
+use support::{assert_success, build_in};
 
 const ENTRIES: &str = "start {}\nupdate(dt: f32) {}\ndraw {}\n";
 
@@ -213,23 +215,19 @@ start { print_i32(level_platforms[2].value) }
 update(dt: f32) {}
 draw {}
 "#;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = root.join("target/struct_array_constant_native");
-    fs::create_dir_all(&work).expect("native regression directory should exist");
+    let directory = support::workspace();
+    let work = directory.path();
     let source_path = work.join("struct_array_constant.spk");
     fs::write(&source_path, source).expect("native regression source should be written");
 
-    let executable = build_in(&work, &source_path);
+    let executable = build_in(work, &source_path);
     assert!(work.join("build/struct_array_constant.ll").is_file());
     assert!(
         work.join("build/struct_array_constant.bc").is_file(),
         "the build command should verify the generated LLVM and retain bitcode"
     );
 
-    let run = Command::new(executable)
-        .current_dir(&work)
-        .output()
-        .expect("native regression executable should start");
+    let run = support::run(Command::new(executable).current_dir(work));
     assert_success("native regression executable", &run);
     assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
 }
@@ -247,26 +245,5 @@ fn assert_unique(errors: &[speck::diagnostic::Diagnostic]) {
         unique.len(),
         errors.len(),
         "duplicate diagnostics: {errors:#?}"
-    );
-}
-
-fn build_in(work: &Path, source: &Path) -> PathBuf {
-    let build = Command::new(env!("CARGO_BIN_EXE_speck"))
-        .current_dir(work)
-        .args(["build"])
-        .arg(source)
-        .output()
-        .expect("Speck compiler should start");
-    assert_success("native regression build", &build);
-    let stem = source.file_stem().expect("source should have a file stem");
-    work.join("build").join(stem)
-}
-
-fn assert_success(description: &str, output: &Output) {
-    assert!(
-        output.status.success(),
-        "{description} failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
     );
 }

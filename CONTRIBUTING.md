@@ -18,6 +18,13 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 ```
 
+Native tests use the same host tool and SDK discovery as normal game builds;
+standalone `llvm-as` is optional. The shared [test support](tests/support/mod.rs)
+creates isolated temporary workspaces, captures subprocess output with deadlines,
+and invokes LLVM's verifier through Clang independently of Speck's emitter.
+Use these helpers for new native tests so a failed or looping game cannot leave
+the suite hanging or reuse another test's artifacts.
+
 ## Proposing changes
 
 - Open an issue first for substantial language, runtime, or architecture
