@@ -6,6 +6,7 @@ pub mod dev;
 pub mod diagnostic;
 pub mod lexer;
 pub mod parser;
+mod runtime_sources;
 pub mod sema;
 pub mod toolchain;
 
