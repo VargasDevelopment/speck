@@ -113,8 +113,11 @@ let platform: Platform = Platform {
 }
 ```
 
-Field layout follows declaration order. Literal initializer order does not
-matter, but every field must appear exactly once with its declared type.
+Field layout follows declaration order. Struct initializer expressions execute
+once each, in their written source order, including nested struct literals and
+array elements. Reordering named fields therefore reorders their side effects
+without changing field layout. Every field must appear exactly once with its
+declared type.
 Unknown, duplicate, and missing initializers are errors. Struct declarations
 are collected module-wide, field names must be unique within a declaration,
 and unknown or directly/indirectly recursive value types are rejected.
