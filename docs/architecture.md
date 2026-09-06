@@ -38,11 +38,17 @@ arrays) from `ReturnType` (a value type or `void`). Array lengths retain their
 source form until semantic analysis resolves positive literals and `i32`
 constants.
 Semantic analysis collects constant, global, and function names before checking
-bodies. Array-length constant resolution runs before ordinary constant and
-global-initializer evaluation. These paths retain separate dependency
-bookkeeping and aggregate evaluation logic; consolidation is current
-structural work on the [roadmap](roadmap.md). Evaluated scalar and aggregate
-values let LLVM emit native initializers without runtime initialization.
+bodies. `sema/type_resolution.rs` resolves array-length constants before ordinary
+constant and global-initializer evaluation, including lengths in the aggregate
+types of their dependencies. Both phases use `sema/constants.rs` for scalar
+operations and typed array/struct construction. Callers supply leaf-expression
+lookup so binding rules and phase-specific diagnostics remain explicit.
+
+The early resolver and ordinary constant evaluator retain separate dependency
+state: the early pass works with unresolved types and caches root diagnostics,
+while the later pass consumes validated declarations and skips known-invalid
+constants. Evaluated scalar and aggregate values let LLVM emit native
+initializers without runtime initialization.
 
 Struct declarations are collected before value and function checking, so type
 use and literals can refer forward within the module. Compiler-only metadata
