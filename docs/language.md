@@ -162,12 +162,30 @@ elements, and every element must exactly match the element type. Nested fixed
 arrays follow from the type grammar and use repeated indexing such as
 `matrix[row][column]`; there is no separate multidimensional-array runtime.
 
+Fixed arrays can be passed to and returned from functions. The signature supplies
+the type for a literal argument or return value; element types and lengths must
+match exactly. Parameters receive value copies, so modifying an array parameter
+does not change the caller's array. Returned arrays are values and can be indexed
+directly. Arguments execute once each, left to right.
+
+```text
+fn shifted(values: [i32; 2]) -> [i32; 2] {
+    values[0] += 1
+    return values
+}
+
+fn pair() -> [i32; 2] { return [4, 5] }
+```
+
+The same rules apply to nested arrays and arrays of structs. These are fixed-size
+copies, with cost proportional to the value size; there are no array references,
+slices, or length-polymorphic parameters.
+
 Arrays use ordinary value storage. Locals live in function storage, mutable
 globals use fixed LLVM globals, and immutable aggregate constants use
 read-only LLVM global storage. No array object, length header, heap allocation,
 or garbage collector is involved. Whole-array assignment between values of
-the same array type copies the complete value. Arrays are not yet accepted as
-function parameter or return types.
+the same array type copies the complete value.
 
 Index expressions accept only `i32`:
 

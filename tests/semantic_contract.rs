@@ -177,14 +177,14 @@ draw {}
             "cannot use compound assignment through constant `STATE`",
         ),
         (
-            "array parameter",
+            "array parameter shape",
             r#"game "Bad"
 fn first(values: [i32; 1]) -> i32 { return values[0] }
-start {}
+start { print_i32(first([1, 2])) }
 update(dt: f32) {}
 draw {}
 "#,
-            "arrays are not supported as function parameters yet",
+            "expected array length 1, found 2 elements",
         ),
         (
             "recursive layout",
@@ -294,13 +294,13 @@ draw {}
             "cannot convert `bool` to a numeric type",
         ),
         (
-            "untyped array literal",
+            "array literal passed to a scalar parameter",
             r#"game "Bad"
 start { print_i32([1]) }
 update(dt: f32) {}
 draw {}
 "#,
-            "array literal requires an explicit array type annotation",
+            "function argument is an array literal, but the declared type is `i32`",
         ),
         (
             "invalid unary operand",

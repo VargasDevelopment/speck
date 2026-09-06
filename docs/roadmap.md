@@ -14,7 +14,7 @@ actually want to write.
 - Explicit conversions, constants, void functions, short-circuit Boolean
   expressions, compound assignment, integer remainder, and range loops.
 - Fixed arrays and named structs, including nested aggregate composition,
-  checked indexing, and value-copy semantics.
+  checked indexing, and value-copy semantics across function boundaries.
 - BOOTS and the larger Boots Ascent already exercise substantial game code.
   The first movement prototype is no longer the next milestone.
 - Compiler correctness and installation fixes: lexical shadowing in bounds
@@ -33,8 +33,9 @@ actually want to write.
    source. Completion and a language server can wait for demonstrated need.
 3. **Learn from distinct programs.** Continue BOOTS, build a small arcade game,
    and make a visual sketch. Record reproducible friction and promote useful
-   examples into the repository. Use that evidence to choose between simple
-   modules, arrays at function boundaries, sprites/text, audio, or math helpers.
+   examples into the repository. Use that evidence to select the next narrow
+   language or runtime capability. The [language reference](language.md) owns
+   the current feature contract; record concrete proposals in the friction log.
 4. **Make games easy to share.** Clarify presenter selection and host-native
    distribution, test clean installation and launch, and measure binary size.
    Choose another native platform from actual players; cross-compilation and
