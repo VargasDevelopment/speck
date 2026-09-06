@@ -417,3 +417,12 @@ Cocoa hardware codes and browser `KeyboardEvent.code` strings are not Speck
 language values. Presenters translate them into CRuMB's fixed identifiers.
 Movement, jumping, collision, Pong rules, and other game mechanics remain
 ordinary user-authored Speck code.
+
+## Compiler nesting limit
+
+The compiler limits combined syntax and expression-tree nesting to 80 levels
+and reports a source-located diagnostic when it is exceeded. This includes
+deeply nested blocks, types, calls, and operators, as well as long binary or
+field/index chains whose trees become deep without extra parentheses. Split
+such expressions into intermediate values or helpers. Array width and the
+number of independent declarations do not count as nesting.
