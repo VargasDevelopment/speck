@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
+use crate::CheckedProgram;
 use crate::ast::{
     ArrayLength, AssignOp, BinaryOp, Block, ConstantValue, Expr, ExprKind, Function, FunctionKind,
     Program, ReturnType, Stmt, StmtKind, StructDecl, UnaryOp, ValueType,
@@ -34,11 +35,34 @@ impl Value {
     }
 }
 
-pub fn emit(program: &Program) -> String {
+/// Emit LLVM for a checked program.
+///
+/// Parsed ASTs cannot be emitted without successful analysis:
+///
+/// ```compile_fail,E0308
+/// let tokens = speck::lexer::lex(
+///     r#"game "Example" start {} update(dt: f32) {} draw {}"#,
+/// ).unwrap();
+/// let program = speck::parser::parse(tokens).unwrap();
+/// speck::codegen::llvm::emit(&program);
+/// ```
+pub fn emit(program: &CheckedProgram) -> String {
     emit_for_target(program, None)
 }
 
-pub fn emit_for_target(program: &Program, target_triple: Option<&str>) -> String {
+/// Emit LLVM for a checked program, optionally specifying the target triple.
+///
+/// Specifying a target also requires a checked program:
+///
+/// ```compile_fail,E0308
+/// let tokens = speck::lexer::lex(
+///     r#"game "Example" start {} update(dt: f32) {} draw {}"#,
+/// ).unwrap();
+/// let program = speck::parser::parse(tokens).unwrap();
+/// speck::codegen::llvm::emit_for_target(&program, Some("aarch64-apple-darwin"));
+/// ```
+pub fn emit_for_target(program: &CheckedProgram, target_triple: Option<&str>) -> String {
+    let program = program.ast();
     let functions = function_signatures(program);
     let structs = program
         .structs

@@ -19,10 +19,12 @@ games do not link Rust:
 
 `src/lib.rs` exposes the analysis and LLVM-emission pipeline. `src/main.rs` and
 `src/cli.rs` are a thin command boundary. `lexer`, `parser`, and `sema` are
-independent stages that return source-located diagnostics. The normal pipeline
-sends the validated AST directly to `codegen/llvm.rs`; it does not yet have a
-separate checked-program type. Parser recursion and constructed expression
-trees share a nesting budget, with expression parsing isolated in
+independent stages that return source-located diagnostics. Successful `analyze`
+returns a `CheckedProgram` owning the single validated AST. Its `ast()` accessor
+permits read-only inspection; private storage prevents mutation or unchecked
+construction. Both public LLVM emission entry points require `&CheckedProgram`,
+so parsing alone cannot bypass validation. Parser recursion and constructed
+expression trees share a nesting budget, with expression parsing isolated in
 `parser/expression.rs`.
 
 The LLVM backend only produces text. Tool discovery, files, subprocesses, and

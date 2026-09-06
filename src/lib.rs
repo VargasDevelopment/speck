@@ -1,5 +1,6 @@
 pub mod ast;
 mod builtins;
+mod checked;
 pub mod cli;
 pub mod codegen;
 pub mod dev;
@@ -12,15 +13,9 @@ pub mod toolchain;
 
 use std::path::Path;
 
-use ast::Program;
 use diagnostic::Diagnostic;
 
-pub fn analyze(source: &str) -> Result<Program, Vec<Diagnostic>> {
-    let tokens = lexer::lex(source)?;
-    let mut program = parser::parse(tokens)?;
-    sema::check(&mut program)?;
-    Ok(program)
-}
+pub use checked::{CheckedProgram, analyze};
 
 pub fn compile_to_llvm(source: &str) -> Result<String, Vec<Diagnostic>> {
     let program = analyze(source)?;
