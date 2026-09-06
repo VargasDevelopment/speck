@@ -1,0 +1,49 @@
+{
+  "name": "speck-language",
+  "displayName": "Speck",
+  "description": "Syntax highlighting and basic editing for Speck tiny-game source files.",
+  "version": "0.1.0",
+  "publisher": "VargasDevelopment",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/VargasDevelopment/speck.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.75.0",
+    "node": ">=20"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "speck",
+        "aliases": [
+          "Speck",
+          "speck"
+        ],
+        "extensions": [
+          ".spk"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "speck",
+        "scopeName": "source.speck",
+        "path": "./syntaxes/speck.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/grammar.test.cjs"
+  },
+  "devDependencies": {
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.3.2"
+  }
+}

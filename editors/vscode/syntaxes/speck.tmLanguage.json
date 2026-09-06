@@ -1,0 +1,294 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Speck",
+  "scopeName": "source.speck",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#function-declaration"
+    },
+    {
+      "include": "#struct-declaration"
+    },
+    {
+      "include": "#variable-declaration"
+    },
+    {
+      "include": "#primitive-types"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#booleans"
+    },
+    {
+      "include": "#namespaces"
+    },
+    {
+      "include": "#builtins"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#calls"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    },
+    {
+      "include": "#identifiers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "match": "//.*$",
+      "name": "comment.line.double-slash.speck"
+    },
+    "strings": {
+      "name": "string.quoted.double.speck",
+      "begin": "\"",
+      "end": "\"|$",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.speck"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.speck"
+        }
+      }
+    },
+    "function-declaration": {
+      "begin": "(?<![A-Za-z0-9_])(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.function.speck"
+        },
+        "2": {
+          "name": "entity.name.function.speck"
+        }
+      },
+      "end": "(?=\\{)",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "match": "[A-Za-z_][A-Za-z0-9_]*(?=\\s*:(?!:))",
+          "name": "variable.parameter.speck"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#punctuation"
+        },
+        {
+          "include": "#operators"
+        }
+      ]
+    },
+    "struct-declaration": {
+      "begin": "(?<![A-Za-z0-9_])(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\{)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.type.speck"
+        },
+        "2": {
+          "name": "entity.name.type.speck"
+        },
+        "3": {
+          "name": "punctuation.section.braces.speck"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.braces.speck"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "match": "[A-Za-z_][A-Za-z0-9_]*(?=\\s*:(?!:))",
+          "name": "variable.other.property.speck"
+        },
+        {
+          "include": "#types"
+        },
+        {
+          "include": "#punctuation"
+        }
+      ]
+    },
+    "variable-declaration": {
+      "begin": "(?<![A-Za-z0-9_])(let|const)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+      "beginCaptures": {
+        "1": {
+          "name": "storage.modifier.speck"
+        },
+        "2": {
+          "name": "variable.other.speck"
+        },
+        "3": {
+          "name": "punctuation.separator.speck"
+        }
+      },
+      "end": "(?==|[{}])",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#types"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "include": "#primitive-types"
+        },
+        {
+          "begin": "\\[",
+          "end": "\\]",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.brackets.speck"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.brackets.speck"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "begin": ";",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.separator.speck"
+                }
+              },
+              "end": "(?=\\])",
+              "patterns": [
+                {
+                  "include": "#comments"
+                },
+                {
+                  "include": "#numbers"
+                },
+                {
+                  "include": "#namespaces"
+                },
+                {
+                  "include": "#constants"
+                },
+                {
+                  "match": "::",
+                  "name": "keyword.operator.speck"
+                },
+                {
+                  "include": "#identifiers"
+                }
+              ]
+            },
+            {
+              "include": "#types"
+            }
+          ]
+        },
+        {
+          "include": "#namespaces"
+        },
+        {
+          "match": "::",
+          "name": "keyword.operator.speck"
+        },
+        {
+          "match": "[A-Za-z_][A-Za-z0-9_]*",
+          "name": "entity.name.type.speck"
+        }
+      ]
+    },
+    "primitive-types": {
+      "match": "(?<![A-Za-z0-9_])(?:i32|f32|bool|void)(?![A-Za-z0-9_])",
+      "name": "storage.type.speck"
+    },
+    "keywords": {
+      "match": "(?<![A-Za-z0-9_])(?:game|start|update|draw|fn|struct|let|const|return|if|else|while|for|in|import|as)(?![A-Za-z0-9_])",
+      "name": "keyword.control.speck"
+    },
+    "booleans": {
+      "match": "(?<![A-Za-z0-9_])(?:true|false)(?![A-Za-z0-9_])",
+      "name": "constant.language.boolean.speck"
+    },
+    "builtins": {
+      "match": "(?<![A-Za-z0-9_])(?:print_i32|debug_frame|clear_rgb|fill_rect|key_down|key_pressed|key_released|quit)(?![A-Za-z0-9_])(?=\\s*\\()",
+      "name": "support.function.speck"
+    },
+    "constants": {
+      "match": "(?<![A-Za-z0-9_])(?:KEY_W|KEY_A|KEY_S|KEY_D|KEY_UP|KEY_DOWN|KEY_LEFT|KEY_RIGHT|KEY_SPACE|KEY_ENTER|KEY_ESCAPE)(?![A-Za-z0-9_])",
+      "name": "support.constant.speck"
+    },
+    "numbers": {
+      "match": "(?<![A-Za-z0-9_])[0-9]+(?:\\.[0-9]+)?",
+      "name": "constant.numeric.speck"
+    },
+    "namespaces": {
+      "match": "[A-Za-z_][A-Za-z0-9_]*(?=\\s*::)",
+      "name": "entity.name.namespace.speck"
+    },
+    "calls": {
+      "match": "[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()",
+      "name": "entity.name.function.speck"
+    },
+    "operators": {
+      "match": "::|\\.\\.|->|[+*/%!=<>-]=?|&&|\\|\\|",
+      "name": "keyword.operator.speck"
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "match": "[{}]",
+          "name": "punctuation.section.braces.speck"
+        },
+        {
+          "match": "[\\[\\]]",
+          "name": "punctuation.section.brackets.speck"
+        },
+        {
+          "match": "[()]",
+          "name": "punctuation.section.parens.speck"
+        },
+        {
+          "match": "[.,;:]",
+          "name": "punctuation.separator.speck"
+        }
+      ]
+    },
+    "identifiers": {
+      "match": "[A-Za-z_][A-Za-z0-9_]*",
+      "name": "variable.other.speck"
+    }
+  }
+}
