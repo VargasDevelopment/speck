@@ -2,12 +2,14 @@ use std::collections::HashSet;
 use std::mem::discriminant;
 
 use crate::ast::{
-    ArrayLength, AssignOp, BinaryOp, Block, Constant, Expr, ExprKind, FieldInitializer, Function,
-    FunctionKind, Global, Param, Program, ReturnType, Stmt, StmtKind, StructDecl, StructField,
-    UnaryOp, ValueType,
+    ArrayLength, AssignOp, Block, Constant, Expr, Function, FunctionKind, Global, Param, Program,
+    ReturnType, Stmt, StmtKind, StructDecl, StructField, ValueType,
 };
 use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::{Token, TokenKind};
+
+mod expression;
+mod limits;
 
 pub fn parse(tokens: Vec<Token>) -> Result<Program, Vec<Diagnostic>> {
     Parser::new(tokens).run().map_err(|error| vec![error])
@@ -16,6 +18,7 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, Vec<Diagnostic>> {
 struct Parser {
     tokens: Vec<Token>,
     cursor: usize,
+    nesting: usize,
     struct_names: HashSet<String>,
     value_scopes: Vec<HashSet<String>>,
 }
@@ -37,6 +40,7 @@ impl Parser {
         Self {
             tokens,
             cursor: 0,
+            nesting: 0,
             struct_names,
             value_scopes: Vec::new(),
         }
@@ -245,6 +249,10 @@ impl Parser {
     }
 
     fn parse_value_type(&mut self) -> Result<ValueType, Diagnostic> {
+        self.nested(Self::value_type)
+    }
+
+    fn value_type(&mut self) -> Result<ValueType, Diagnostic> {
         let token = self.advance();
         match token.kind {
             TokenKind::I32 => Ok(ValueType::I32),
@@ -321,6 +329,10 @@ impl Parser {
     }
 
     fn block(&mut self) -> Result<(Block, Span), Diagnostic> {
+        self.nested(Self::block_contents)
+    }
+
+    fn block_contents(&mut self) -> Result<(Block, Span), Diagnostic> {
         self.expect(&TokenKind::LeftBrace, "expected `{` to begin block")?;
         self.value_scopes.push(HashSet::new());
         let mut statements = Vec::new();
@@ -470,302 +482,17 @@ impl Parser {
         })
     }
 
-    fn expression(&mut self) -> Result<Expr, Diagnostic> {
-        self.logical_or()
-    }
-
-    fn logical_or(&mut self) -> Result<Expr, Diagnostic> {
-        let mut expression = self.logical_and()?;
-        while self.take(&TokenKind::OrOr) {
-            let right = self.logical_and()?;
-            expression = binary(expression, BinaryOp::LogicalOr, right);
+    fn nested<T>(
+        &mut self,
+        parse: fn(&mut Self) -> Result<T, Diagnostic>,
+    ) -> Result<T, Diagnostic> {
+        if self.nesting == limits::MAX_NESTING {
+            return Err(limits::exceeded(self.current().span));
         }
-        Ok(expression)
-    }
-
-    fn logical_and(&mut self) -> Result<Expr, Diagnostic> {
-        let mut expression = self.equality()?;
-        while self.take(&TokenKind::AndAnd) {
-            let right = self.equality()?;
-            expression = binary(expression, BinaryOp::LogicalAnd, right);
-        }
-        Ok(expression)
-    }
-
-    fn equality(&mut self) -> Result<Expr, Diagnostic> {
-        let mut expression = self.comparison()?;
-        loop {
-            let op = if self.take(&TokenKind::EqualEqual) {
-                Some(BinaryOp::Equal)
-            } else if self.take(&TokenKind::BangEqual) {
-                Some(BinaryOp::NotEqual)
-            } else {
-                None
-            };
-            let Some(op) = op else { break };
-            let right = self.comparison()?;
-            expression = binary(expression, op, right);
-        }
-        Ok(expression)
-    }
-
-    fn comparison(&mut self) -> Result<Expr, Diagnostic> {
-        let mut expression = self.term()?;
-        loop {
-            let op = if self.take(&TokenKind::Less) {
-                Some(BinaryOp::Less)
-            } else if self.take(&TokenKind::LessEqual) {
-                Some(BinaryOp::LessEqual)
-            } else if self.take(&TokenKind::Greater) {
-                Some(BinaryOp::Greater)
-            } else if self.take(&TokenKind::GreaterEqual) {
-                Some(BinaryOp::GreaterEqual)
-            } else {
-                None
-            };
-            let Some(op) = op else { break };
-            let right = self.term()?;
-            expression = binary(expression, op, right);
-        }
-        Ok(expression)
-    }
-
-    fn term(&mut self) -> Result<Expr, Diagnostic> {
-        let mut expression = self.factor()?;
-        loop {
-            let op = if self.take(&TokenKind::Plus) {
-                Some(BinaryOp::Add)
-            } else if self.take(&TokenKind::Minus) {
-                Some(BinaryOp::Subtract)
-            } else {
-                None
-            };
-            let Some(op) = op else { break };
-            let right = self.factor()?;
-            expression = binary(expression, op, right);
-        }
-        Ok(expression)
-    }
-
-    fn factor(&mut self) -> Result<Expr, Diagnostic> {
-        let mut expression = self.unary()?;
-        loop {
-            let op = if self.take(&TokenKind::Star) {
-                Some(BinaryOp::Multiply)
-            } else if self.take(&TokenKind::Slash) {
-                Some(BinaryOp::Divide)
-            } else if self.take(&TokenKind::Percent) {
-                Some(BinaryOp::Remainder)
-            } else {
-                None
-            };
-            let Some(op) = op else { break };
-            let right = self.unary()?;
-            expression = binary(expression, op, right);
-        }
-        Ok(expression)
-    }
-
-    fn unary(&mut self) -> Result<Expr, Diagnostic> {
-        let token = self.current().clone();
-        let op = if self.take(&TokenKind::Minus) {
-            Some(UnaryOp::Negate)
-        } else if self.take(&TokenKind::Bang) {
-            Some(UnaryOp::Not)
-        } else {
-            None
-        };
-        if let Some(op) = op {
-            let operand = self.unary()?;
-            let span = token.span.merge(operand.span);
-            Ok(Expr {
-                kind: ExprKind::Unary {
-                    op,
-                    operand: Box::new(operand),
-                },
-                span,
-            })
-        } else {
-            self.postfix()
-        }
-    }
-
-    fn postfix(&mut self) -> Result<Expr, Diagnostic> {
-        let mut expression = self.primary()?;
-        loop {
-            if self.take(&TokenKind::LeftBracket) {
-                let index = self.expression()?;
-                let end = self
-                    .expect(&TokenKind::RightBracket, "expected `]` after array index")?
-                    .span;
-                let span = expression.span.merge(end);
-                expression = Expr {
-                    kind: ExprKind::Index {
-                        base: Box::new(expression),
-                        index: Box::new(index),
-                    },
-                    span,
-                };
-            } else if self.take(&TokenKind::Dot) {
-                let (name, name_span) = self.identifier("expected a field name after `.`")?;
-                let span = expression.span.merge(name_span);
-                expression = Expr {
-                    kind: ExprKind::Field {
-                        base: Box::new(expression),
-                        name,
-                        name_span,
-                    },
-                    span,
-                };
-            } else {
-                break;
-            }
-        }
-        Ok(expression)
-    }
-
-    fn primary(&mut self) -> Result<Expr, Diagnostic> {
-        let token = self.advance();
-        match token.kind {
-            TokenKind::Integer(value) => Ok(Expr {
-                kind: ExprKind::I32(value),
-                span: token.span,
-            }),
-            TokenKind::Float(value) => Ok(Expr {
-                kind: ExprKind::F32(value),
-                span: token.span,
-            }),
-            TokenKind::True | TokenKind::False => Ok(Expr {
-                kind: ExprKind::Bool(matches!(token.kind, TokenKind::True)),
-                span: token.span,
-            }),
-            TokenKind::LeftBracket => {
-                let mut elements = Vec::new();
-                if !self.at(&TokenKind::RightBracket) {
-                    loop {
-                        elements.push(self.expression()?);
-                        if !self.take(&TokenKind::Comma) {
-                            break;
-                        }
-                        if self.at(&TokenKind::RightBracket) {
-                            break;
-                        }
-                    }
-                }
-                let end = self
-                    .expect(&TokenKind::RightBracket, "expected `]` after array literal")?
-                    .span;
-                Ok(Expr {
-                    kind: ExprKind::ArrayLiteral(elements),
-                    span: token.span.merge(end),
-                })
-            }
-            TokenKind::Identifier(name) => {
-                if self.looks_like_struct_literal(&name) {
-                    return self.struct_literal(name, token.span);
-                }
-                if !self.take(&TokenKind::LeftParen) {
-                    return Ok(Expr {
-                        kind: ExprKind::Variable(name),
-                        span: token.span,
-                    });
-                }
-                let (args, end) = self.arguments()?;
-                Ok(Expr {
-                    kind: ExprKind::Call { name, args },
-                    span: token.span.merge(end),
-                })
-            }
-            TokenKind::I32 | TokenKind::F32 => {
-                let target = if matches!(token.kind, TokenKind::I32) {
-                    ValueType::I32
-                } else {
-                    ValueType::F32
-                };
-                self.expect(
-                    &TokenKind::LeftParen,
-                    "expected `(` after numeric conversion type",
-                )?;
-                let (args, end) = self.arguments()?;
-                Ok(Expr {
-                    kind: ExprKind::Conversion { target, args },
-                    span: token.span.merge(end),
-                })
-            }
-            TokenKind::LeftParen => {
-                let mut expression = self.expression()?;
-                let end = self
-                    .expect(&TokenKind::RightParen, "expected `)` after expression")?
-                    .span;
-                expression.span = token.span.merge(end);
-                Ok(expression)
-            }
-            _ => Err(Diagnostic::new("expected an expression", token.span)),
-        }
-    }
-
-    fn struct_literal(&mut self, name: String, start: Span) -> Result<Expr, Diagnostic> {
-        self.expect(&TokenKind::LeftBrace, "expected `{` after struct type name")?;
-        let mut fields = Vec::new();
-        while !self.at(&TokenKind::RightBrace) && !self.at(&TokenKind::Eof) {
-            let (field_name, field_start) = self.identifier("expected a field initializer name")?;
-            self.expect(
-                &TokenKind::Colon,
-                "expected `:` after field initializer name",
-            )?;
-            let value = self.expression()?;
-            let span = field_start.merge(value.span);
-            fields.push(FieldInitializer {
-                name: field_name,
-                value,
-                span,
-            });
-            self.take(&TokenKind::Comma);
-        }
-        let end = self
-            .expect(&TokenKind::RightBrace, "expected `}` after struct literal")?
-            .span;
-        Ok(Expr {
-            kind: ExprKind::StructLiteral { name, fields },
-            span: start.merge(end),
-        })
-    }
-
-    fn looks_like_struct_literal(&self, name: &str) -> bool {
-        if !self.at(&TokenKind::LeftBrace) || self.is_value_binding(name) {
-            return false;
-        }
-        self.struct_names.contains(name)
-            || matches!(
-                (
-                    self.tokens.get(self.cursor + 1).map(|token| &token.kind),
-                    self.tokens.get(self.cursor + 2).map(|token| &token.kind)
-                ),
-                (Some(TokenKind::Identifier(_)), Some(TokenKind::Colon))
-            )
-    }
-
-    fn is_value_binding(&self, name: &str) -> bool {
-        self.value_scopes
-            .iter()
-            .rev()
-            .any(|scope| scope.contains(name))
-    }
-
-    fn arguments(&mut self) -> Result<(Vec<Expr>, Span), Diagnostic> {
-        let mut args = Vec::new();
-        if !self.at(&TokenKind::RightParen) {
-            loop {
-                args.push(self.expression()?);
-                if !self.take(&TokenKind::Comma) {
-                    break;
-                }
-            }
-        }
-        let end = self
-            .expect(&TokenKind::RightParen, "expected `)` after arguments")?
-            .span;
-        Ok((args, end))
+        self.nesting += 1;
+        let result = parse(self);
+        self.nesting -= 1;
+        result
     }
 
     fn identifier(&mut self, message: &str) -> Result<(String, Span), Diagnostic> {
@@ -835,21 +562,10 @@ impl Parser {
     }
 }
 
-fn binary(left: Expr, op: BinaryOp, right: Expr) -> Expr {
-    let span = left.span.merge(right.span);
-    Expr {
-        kind: ExprKind::Binary {
-            left: Box::new(left),
-            op,
-            right: Box::new(right),
-        },
-        span,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::{BinaryOp, ExprKind};
     use crate::lexer;
 
     fn parse_source(source: &str) -> Program {
