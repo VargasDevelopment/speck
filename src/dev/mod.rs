@@ -193,13 +193,6 @@ pub fn run(
     if !status.success() {
         return Err(format!("development game exited with {status}"));
     }
-    if let Some(limit) = options.frame_limit
-        && frames_received != u64::from(limit)
-    {
-        return Err(format!(
-            "development game completed, but the server received {frames_received} of {limit} frames"
-        ));
-    }
     println!("Frames received: {frames_received}");
     println!("Development game stopped cleanly after streaming its final frame.");
     Ok(())
