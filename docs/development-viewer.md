@@ -41,6 +41,9 @@ explicit limit for deterministic automation:
 cargo run -- dev examples/keyboard_rectangle.spk --port 0 --frames 120
 ```
 
+The frame limit is a maximum. Calling `quit()` before reaching it is successful,
+including a call from `start` before any frames are streamed.
+
 Ctrl-C is forwarded as SIGINT so CRuMB performs its normal shutdown, then the
 HTTP, input-watchdog, and frame-receiver threads stop. A two-second deadline
 prevents an unresponsive child from becoming an orphan. Normal game completion
