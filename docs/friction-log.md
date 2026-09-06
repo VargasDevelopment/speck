@@ -51,3 +51,16 @@ discard them or treat them as language requirements prematurely.
 - Movement helpers, action mapping, rebinding, arbitrary key enumeration, and
   physics remain unevaluated. The next manually written controllable rectangle
   and BOOTS sketch should determine whether any of them represent real friction.
+
+## External contour sketch: periodic math
+
+TIDELINES in the separate `speck-showcases` project draws moving contour lines
+from two crossing periodic waves. Its first version needed a local parabolic
+wave approximation and manual range reduction. `sin(angle: f32) -> f32` now
+expresses that operation directly through the host math library; the sketch
+keeps its animation phase bounded. This earns one small math builtin without
+adding a general vector, animation, or graphics subsystem.
+
+BOOTS and PULSE also use small game-owned bitmap label tables. Those are
+concrete text-authoring friction, but they do not yet establish a runtime
+string or font API contract.
