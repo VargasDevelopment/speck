@@ -7,6 +7,10 @@ use crate::ast::{
 use crate::builtins;
 use crate::diagnostic::{Diagnostic, Span};
 
+mod struct_graph;
+
+use struct_graph::StructTypeAnalysis;
+
 #[derive(Clone)]
 struct Signature {
     params: Vec<ValueType>,
@@ -76,7 +80,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         }
     }
     validate_declared_types(program, &structs, &mut diagnostics);
-    reject_recursive_structs(&structs, &mut diagnostics);
+    let struct_types = StructTypeAnalysis::new(&structs, &mut diagnostics);
 
     for constant in &program.constants {
         if builtins::predefined_constant(&constant.name).is_some() {
@@ -151,7 +155,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         program
             .constants
             .iter()
-            .filter(|constant| type_resolution_failed(&constant.ty, &structs))
+            .filter(|constant| struct_types.resolution_failed(&constant.ty))
             .map(|constant| constant.name.clone()),
     );
     let invalid_globals = program
@@ -159,7 +163,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         .iter()
         .enumerate()
         .filter_map(|(index, global)| {
-            (type_resolution_failed(&global.ty, &structs)
+            (struct_types.resolution_failed(&global.ty)
                 || !validate_compile_time_structure(
                     &global.init,
                     &globals,
@@ -230,9 +234,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         .map(|constant| (constant.name.to_owned(), constant.value.clone()))
         .collect::<HashMap<_, _>>();
     for constant in &program.constants {
-        if invalid_constants.contains(&constant.name)
-            || type_resolution_failed(&constant.ty, &structs)
-        {
+        if invalid_constants.contains(&constant.name) {
             continue;
         }
         let mut checker = FunctionChecker::new(
@@ -679,36 +681,6 @@ fn positive_array_length(value: i64, span: Span) -> Result<usize, Diagnostic> {
     usize::try_from(value).map_err(|_| Diagnostic::new("array length is too large", span))
 }
 
-fn type_resolution_failed(ty: &ValueType, structs: &HashMap<String, StructDecl>) -> bool {
-    fn visit(
-        ty: &ValueType,
-        structs: &HashMap<String, StructDecl>,
-        visiting: &mut HashSet<String>,
-    ) -> bool {
-        match ty {
-            ValueType::Array { element, length } => {
-                matches!(length, ArrayLength::Invalid) || visit(element, structs, visiting)
-            }
-            ValueType::Struct(name) => {
-                if !visiting.insert(name.clone()) {
-                    return false;
-                }
-                let failed = structs.get(name).is_some_and(|declaration| {
-                    declaration
-                        .fields
-                        .iter()
-                        .any(|field| visit(&field.ty, structs, visiting))
-                });
-                visiting.remove(name);
-                failed
-            }
-            ValueType::I32 | ValueType::F32 | ValueType::Bool => false,
-        }
-    }
-
-    visit(ty, structs, &mut HashSet::new())
-}
-
 fn validate_declared_types(
     program: &Program,
     structs: &HashMap<String, StructDecl>,
@@ -781,51 +753,6 @@ fn validate_known_type(
             validate_known_type(element, span, structs, diagnostics);
         }
         ValueType::I32 | ValueType::F32 | ValueType::Bool | ValueType::Struct(_) => {}
-    }
-}
-
-fn reject_recursive_structs(
-    structs: &HashMap<String, StructDecl>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for declaration in structs.values() {
-        let mut visited = HashSet::new();
-        if struct_reaches(&declaration.name, &declaration.name, structs, &mut visited) {
-            diagnostics.push(Diagnostic::new(
-                format!(
-                    "recursive value type is not supported: struct `{}` contains itself",
-                    declaration.name
-                ),
-                declaration.span,
-            ));
-        }
-    }
-}
-
-fn struct_reaches(
-    target: &str,
-    current: &str,
-    structs: &HashMap<String, StructDecl>,
-    visited: &mut HashSet<String>,
-) -> bool {
-    if !visited.insert(current.to_owned()) {
-        return false;
-    }
-    let Some(declaration) = structs.get(current) else {
-        return false;
-    };
-    declaration.fields.iter().any(|field| {
-        named_types(&field.ty).into_iter().any(|name| {
-            name == target || struct_reaches(target, name, structs, &mut visited.clone())
-        })
-    })
-}
-
-fn named_types(ty: &ValueType) -> Vec<&str> {
-    match ty {
-        ValueType::Struct(name) => vec![name],
-        ValueType::Array { element, .. } => named_types(element),
-        ValueType::I32 | ValueType::F32 | ValueType::Bool => Vec::new(),
     }
 }
 
