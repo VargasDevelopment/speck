@@ -17,24 +17,79 @@ pub struct FrameStore {
     shared: Arc<(Mutex<FrameState>, Condvar)>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum ViewerState {
+    #[default]
+    Running,
+    Stopped,
+    Building,
+    BuildFailed,
+    Watching,
+}
+
+impl ViewerState {
+    fn wire(self, frame_available: bool) -> &'static str {
+        if frame_available {
+            return "live";
+        }
+        match self {
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+            Self::Building => "building",
+            Self::BuildFailed => "error",
+            Self::Watching => "watching",
+        }
+    }
+}
+
 #[derive(Default)]
 struct FrameState {
     latest: Option<Frame>,
-    stopped: bool,
+    state: ViewerState,
+    generation: u64,
+    sequence: u64,
+    delivery_offset: u64,
 }
 
 struct FrameSnapshot {
     frame: Option<Frame>,
-    stopped: bool,
+    state: ViewerState,
+    generation: u64,
 }
 
 impl FrameStore {
-    pub fn publish(&self, frame: Frame) {
+    pub fn publish(&self, mut frame: Frame) {
         let (state, changed) = &*self.shared;
         let mut state = state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        frame.sequence += state.delivery_offset;
+        state.sequence = frame.sequence;
         state.latest = Some(frame);
+        changed.notify_all();
+    }
+
+    pub(super) fn begin_run(&self) {
+        let (state, changed) = &*self.shared;
+        let mut state = state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.generation += 1;
+        state.delivery_offset = state.sequence;
+        state.latest = None;
+        state.state = ViewerState::Running;
+        changed.notify_all();
+    }
+
+    pub(super) fn set_state(&self, status: ViewerState) {
+        let (state, changed) = &*self.shared;
+        let mut state = state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if matches!(status, ViewerState::Building | ViewerState::BuildFailed) {
+            state.latest = None;
+        }
+        state.state = status;
         changed.notify_all();
     }
 
@@ -43,8 +98,16 @@ impl FrameStore {
         let mut state = state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.stopped = true;
+        state.state = ViewerState::Stopped;
         changed.notify_all();
+    }
+
+    fn generation(&self) -> u64 {
+        self.shared
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .generation
     }
 
     pub fn latest_sequence(&self) -> Option<u64> {
@@ -62,7 +125,7 @@ impl FrameStore {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (state, _) = changed
             .wait_timeout_while(state, timeout, |state| {
-                !state.stopped
+                state.state == ViewerState::Running
                     && state
                         .latest
                         .as_ref()
@@ -76,7 +139,8 @@ impl FrameStore {
             .cloned();
         FrameSnapshot {
             frame,
-            stopped: state.stopped,
+            state: state.state,
+            generation: state.generation,
         }
     }
 }
@@ -88,6 +152,7 @@ pub struct InputControl {
 
 #[derive(Default)]
 struct InputControlState {
+    generation: u64,
     game: Option<TcpStream>,
     owner: Option<String>,
     last_seen: Option<Instant>,
@@ -99,10 +164,11 @@ pub enum InputResult {
     Ignored,
     Busy,
     GameUnavailable,
+    StaleGeneration,
 }
 
 impl InputControl {
-    pub fn connect_game(&self, stream: TcpStream) -> Result<(), String> {
+    pub fn connect_game(&self, stream: TcpStream, generation: u64) -> Result<(), String> {
         stream
             .set_write_timeout(Some(Duration::from_secs(1)))
             .map_err(|error| format!("could not configure input control timeout: {error}"))?;
@@ -110,6 +176,7 @@ impl InputControl {
             .shared
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.generation = generation;
         state.game = Some(stream);
         state.owner = None;
         state.last_seen = None;
@@ -126,10 +193,7 @@ impl InputControl {
         state.last_seen = None;
     }
 
-    pub fn apply(&self, input: BrowserInput) -> InputResult {
-        if matches!(&input, BrowserInput::UnsupportedKey { .. }) {
-            return InputResult::Ignored;
-        }
+    pub fn apply(&self, input: BrowserInput, generation: u64) -> InputResult {
         let releases_control = matches!(&input, BrowserInput::ReleaseAll { .. });
         let mut state = self
             .shared
@@ -137,6 +201,13 @@ impl InputControl {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if state.game.is_none() {
             return InputResult::GameUnavailable;
+        }
+        // Test freshness under the same lock that selects the game and claims its lease.
+        if generation != state.generation {
+            return InputResult::StaleGeneration;
+        }
+        if matches!(&input, BrowserInput::UnsupportedKey { .. }) {
+            return InputResult::Ignored;
         }
         let client = input.client();
         if state.owner.as_deref().is_some_and(|owner| owner != client) {
@@ -362,7 +433,7 @@ pub fn spawn_frame_receiver(
                 return;
             }
         };
-        if let Err(error) = controls.connect_game(control_stream) {
+        if let Err(error) = controls.connect_game(control_stream, frames.generation()) {
             let _ = fatal.send(error);
             shutdown.store(true, Ordering::Release);
             frames.stop();
@@ -449,6 +520,8 @@ fn handle_http(
         }
         let after = parse_after(query)?;
         let snapshot = frames.wait_after(after, Duration::from_secs(2));
+        let generation = snapshot.generation.to_string();
+        let state = snapshot.state.wire(snapshot.frame.is_some());
         if let Some(frame) = snapshot.frame {
             let sequence = frame.sequence.to_string();
             return respond(
@@ -457,7 +530,8 @@ fn handle_http(
                 "application/octet-stream",
                 &[
                     ("Cache-Control", "no-store"),
-                    ("X-Speck-State", "live"),
+                    ("X-Speck-State", state),
+                    ("X-Speck-Generation", &generation),
                     ("X-Speck-Sequence", &sequence),
                     ("X-Speck-Width", "320"),
                     ("X-Speck-Height", "180"),
@@ -466,20 +540,19 @@ fn handle_http(
                 &frame.pixels,
             );
         }
-        let state = if snapshot.stopped {
-            "stopped"
-        } else {
-            "running"
-        };
         return respond(
             &mut stream,
             "204 No Content",
             "application/octet-stream",
-            &[("Cache-Control", "no-store"), ("X-Speck-State", state)],
+            &[
+                ("Cache-Control", "no-store"),
+                ("X-Speck-State", state),
+                ("X-Speck-Generation", &generation),
+            ],
             &[],
         );
     }
-    if request.path == "/input" {
+    if request.path.split('?').next() == Some("/input") {
         if request.method != "POST" {
             return respond(
                 &mut stream,
@@ -489,6 +562,22 @@ fn handle_http(
                 b"input requires POST\n",
             );
         }
+        let generation = match request
+            .path
+            .strip_prefix("/input?generation=")
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            Some(generation) => generation,
+            None => {
+                return respond(
+                    &mut stream,
+                    "400 Bad Request",
+                    "text/plain",
+                    &[],
+                    b"input requires a run generation\n",
+                );
+            }
+        };
         let input = match protocol::parse_browser_input(&request.body) {
             Ok(input) => input,
             Err(error) => {
@@ -501,10 +590,17 @@ fn handle_http(
                 );
             }
         };
-        return match controls.apply(input) {
+        return match controls.apply(input, generation) {
             InputResult::Accepted | InputResult::Ignored => {
                 respond(&mut stream, "204 No Content", "text/plain", &[], &[])
             }
+            InputResult::StaleGeneration => respond(
+                &mut stream,
+                "412 Precondition Failed",
+                "text/plain",
+                &[],
+                b"input belongs to a previous game run\n",
+            ),
             InputResult::Busy => respond(
                 &mut stream,
                 "409 Conflict",
@@ -653,317 +749,4 @@ fn respond(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
-    use std::sync::atomic::AtomicBool;
-    use std::sync::mpsc;
-
-    use super::*;
-    use crate::dev::protocol::{
-        FRAME_HEIGHT, FRAME_PAYLOAD_BYTES, FRAME_WIDTH, Key, decode_control,
-    };
-
-    #[test]
-    fn serves_viewer_and_complete_binary_frame() {
-        let binding = bind_http(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, false)
-            .expect("HTTP listener should bind");
-        let address = binding.address;
-        let frames = FrameStore::default();
-        let controls = InputControl::default();
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let (fatal_tx, _fatal_rx) = mpsc::channel();
-        let thread = spawn_http_server(
-            binding.listener,
-            frames.clone(),
-            controls,
-            shutdown.clone(),
-            fatal_tx,
-        );
-
-        let page = get(address, "/");
-        assert!(page.starts_with(b"HTTP/1.1 200 OK"));
-        assert!(page.windows(7).any(|window| window == b"<canvas"));
-        let page_text = String::from_utf8_lossy(&page);
-        assert!(page_text.contains("event.code"));
-        assert!(page_text.contains("event.repeat"));
-        assert!(page_text.contains("event.preventDefault()"));
-        assert!(page_text.contains("visibilitychange"));
-        assert!(page_text.contains("pagehide"));
-        assert!(page_text.contains("releaseAll"));
-        assert!(page_text.contains("heartbeat"));
-        assert!(page_text.contains("inputQueue = inputQueue.then"));
-
-        let pixels = vec![73_u8; FRAME_PAYLOAD_BYTES];
-        frames.publish(Frame {
-            sequence: 9,
-            pixels: pixels.clone(),
-        });
-        let response = get(address, "/frame?after=0");
-        let body_start = response
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-            .expect("response should contain headers")
-            + 4;
-        assert!(
-            response[..body_start]
-                .windows(19)
-                .any(|window| window == b"X-Speck-Sequence: 9")
-        );
-        assert_eq!(&response[body_start..], pixels);
-
-        shutdown.store(true, Ordering::Release);
-        thread.join().expect("HTTP thread should stop");
-    }
-
-    #[test]
-    fn accepted_http_connections_wait_for_delayed_requests() {
-        let binding = bind_http(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, false)
-            .expect("HTTP listener should bind");
-        let address = binding.address;
-        let frames = FrameStore::default();
-        let controls = InputControl::default();
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let (fatal_tx, _fatal_rx) = mpsc::channel();
-        let thread = spawn_http_server(
-            binding.listener,
-            frames,
-            controls,
-            shutdown.clone(),
-            fatal_tx,
-        );
-
-        let mut stream = TcpStream::connect(address).expect("test should connect");
-        thread::sleep(Duration::from_millis(50));
-        stream
-            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-            .expect("delayed request should write");
-        let response = read_response(&mut stream);
-        assert!(response.starts_with(b"HTTP/1.1 200 OK"));
-
-        shutdown.store(true, Ordering::Release);
-        thread.join().expect("HTTP thread should stop");
-    }
-
-    fn get(address: SocketAddr, path: &str) -> Vec<u8> {
-        let mut stream = TcpStream::connect(address).expect("test should connect");
-        write!(
-            stream,
-            "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-        )
-        .expect("request should write");
-        read_response(&mut stream)
-    }
-
-    fn post(address: SocketAddr, path: &str, body: &[u8]) -> Vec<u8> {
-        let mut stream = TcpStream::connect(address).expect("test should connect");
-        write!(
-            stream,
-            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        )
-        .expect("request headers should write");
-        stream.write_all(body).expect("request body should write");
-        read_response(&mut stream)
-    }
-
-    fn read_response(stream: &mut TcpStream) -> Vec<u8> {
-        let mut response = Vec::new();
-        let mut buffer = [0_u8; 1024];
-        let body_start = loop {
-            if let Some(position) = response.windows(4).position(|window| window == b"\r\n\r\n") {
-                break position + 4;
-            }
-            let read = stream.read(&mut buffer).expect("response should read");
-            assert!(read > 0, "response headers should be complete");
-            response.extend_from_slice(&buffer[..read]);
-        };
-        let headers =
-            std::str::from_utf8(&response[..body_start]).expect("response headers should be UTF-8");
-        let content_length = headers
-            .lines()
-            .find_map(|line| {
-                let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case("Content-Length").then(|| {
-                    value
-                        .trim()
-                        .parse::<usize>()
-                        .expect("content length should parse")
-                })
-            })
-            .expect("response should declare content length");
-        let response_length = body_start + content_length;
-        while response.len() < response_length {
-            let remaining = response_length - response.len();
-            let chunk = remaining.min(buffer.len());
-            let read = stream
-                .read(&mut buffer[..chunk])
-                .expect("response body should read");
-            assert!(read > 0, "response body should be complete");
-            response.extend_from_slice(&buffer[..read]);
-        }
-        response.truncate(response_length);
-        response
-    }
-
-    fn connected_controls() -> (InputControl, TcpStream) {
-        let listener =
-            TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("control listener should bind");
-        let address = listener.local_addr().expect("address should exist");
-        let game = TcpStream::connect(address).expect("game peer should connect");
-        game.set_read_timeout(Some(Duration::from_secs(2)))
-            .expect("read timeout should configure");
-        let (host, _) = listener.accept().expect("host peer should accept");
-        let controls = InputControl::default();
-        controls
-            .connect_game(host)
-            .expect("game control should connect");
-        (controls, game)
-    }
-
-    fn read_control(game: &mut TcpStream) -> ControlMessage {
-        let mut bytes = [0_u8; protocol::CONTROL_MESSAGE_BYTES];
-        game.read_exact(&mut bytes)
-            .expect("control record should arrive");
-        decode_control(&bytes).expect("control record should be valid")
-    }
-
-    #[test]
-    fn browser_input_reaches_game_with_single_controller_ownership() {
-        let binding = bind_http(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, false)
-            .expect("HTTP listener should bind");
-        let address = binding.address;
-        let (controls, mut game) = connected_controls();
-        let frames = FrameStore::default();
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let (fatal_tx, _fatal_rx) = mpsc::channel();
-        let thread = spawn_http_server(
-            binding.listener,
-            frames,
-            controls.clone(),
-            shutdown.clone(),
-            fatal_tx,
-        );
-
-        let response = post(address, "/input", b"viewer-1 down ArrowLeft");
-        assert!(response.starts_with(b"HTTP/1.1 204 No Content"));
-        assert_eq!(
-            read_control(&mut game),
-            ControlMessage::Key {
-                key: Key::Left,
-                down: true
-            }
-        );
-
-        let repeated = post(address, "/input", b"viewer-1 down ArrowLeft");
-        assert!(repeated.starts_with(b"HTTP/1.1 204 No Content"));
-        assert_eq!(
-            read_control(&mut game),
-            ControlMessage::Key {
-                key: Key::Left,
-                down: true
-            }
-        );
-
-        let busy = post(address, "/input", b"viewer-2 down KeyD");
-        assert!(busy.starts_with(b"HTTP/1.1 409 Conflict"));
-
-        let release = post(address, "/input", b"viewer-1 release -");
-        assert!(release.starts_with(b"HTTP/1.1 204 No Content"));
-        assert_eq!(read_control(&mut game), ControlMessage::ReleaseAll);
-
-        let next = post(address, "/input", b"viewer-2 down KeyD");
-        assert!(next.starts_with(b"HTTP/1.1 204 No Content"));
-        assert_eq!(
-            read_control(&mut game),
-            ControlMessage::Key {
-                key: Key::D,
-                down: true
-            }
-        );
-
-        shutdown.store(true, Ordering::Release);
-        thread.join().expect("HTTP thread should stop");
-    }
-
-    #[test]
-    fn malformed_oversized_and_unsupported_browser_input_is_safe() {
-        let binding = bind_http(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, false)
-            .expect("HTTP listener should bind");
-        let address = binding.address;
-        let (controls, _game) = connected_controls();
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let (fatal_tx, _fatal_rx) = mpsc::channel();
-        let thread = spawn_http_server(
-            binding.listener,
-            FrameStore::default(),
-            controls,
-            shutdown.clone(),
-            fatal_tx,
-        );
-
-        assert!(post(address, "/input", b"broken").starts_with(b"HTTP/1.1 400 Bad Request"));
-        assert!(
-            post(
-                address,
-                "/input",
-                &[b'x'; protocol::BROWSER_INPUT_MAX_BYTES + 1]
-            )
-            .starts_with(b"HTTP/1.1 400 Bad Request")
-        );
-        assert!(
-            post(address, "/input", b"viewer-1 down KeyQ").starts_with(b"HTTP/1.1 204 No Content")
-        );
-
-        shutdown.store(true, Ordering::Release);
-        thread.join().expect("HTTP thread should stop");
-    }
-
-    #[test]
-    fn disconnect_and_expired_controller_lease_release_all_keys() {
-        let (controls, mut game) = connected_controls();
-        assert_eq!(
-            controls.apply(BrowserInput::Heartbeat {
-                client: "viewer-1".into()
-            }),
-            InputResult::Accepted
-        );
-        thread::sleep(INPUT_LEASE_TIMEOUT + Duration::from_millis(20));
-        controls.expire_lease();
-        assert_eq!(read_control(&mut game), ControlMessage::ReleaseAll);
-
-        assert_eq!(
-            controls.apply(BrowserInput::Heartbeat {
-                client: "viewer-2".into()
-            }),
-            InputResult::Accepted
-        );
-        controls.release_and_disconnect();
-        assert_eq!(read_control(&mut game), ControlMessage::ReleaseAll);
-        assert_eq!(
-            controls.apply(BrowserInput::Heartbeat {
-                client: "viewer-2".into()
-            }),
-            InputResult::GameUnavailable
-        );
-    }
-
-    #[test]
-    fn advertised_dimensions_match_protocol() {
-        assert_eq!(FRAME_WIDTH, 320);
-        assert_eq!(FRAME_HEIGHT, 180);
-    }
-
-    #[test]
-    fn falls_back_safely_when_default_port_is_busy() {
-        let blocker = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("blocker should bind");
-        let occupied = blocker.local_addr().expect("address should exist").port();
-        let binding = bind_http(IpAddr::V4(Ipv4Addr::LOCALHOST), occupied, true)
-            .expect("fallback should bind");
-        assert!(binding.used_fallback_port);
-        assert_ne!(binding.address.port(), occupied);
-
-        let error = bind_http(IpAddr::V4(Ipv4Addr::LOCALHOST), occupied, false)
-            .expect_err("explicit conflict should fail");
-        assert!(error.contains("could not bind development viewer"));
-    }
-}
+mod tests;

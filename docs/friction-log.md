@@ -32,11 +32,11 @@ guide language work without making every familiar feature a requirement.
 ## Explicitly deferred
 
 - Alternative names, aliases, or renaming for `i32` and `f32`.
-- Syntax highlighting.
 - Completion for built-ins and declared functions.
 - Language-server functionality.
 
-These editor and naming questions remain open; this slice does not silently
+Syntax highlighting is now available through the VS Code / Cursor extension.
+The remaining editor and naming questions stay open; this slice does not silently
 discard them or treat them as language requirements prematurely.
 
 ## Input-slice observations

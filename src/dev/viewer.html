@@ -26,6 +26,7 @@
   const image = context.createImageData(width, height);
   context.imageSmoothingEnabled = false;
   let sequence = 0;
+  let generation = null;
   const gameCodes = new Set([
     'KeyW', 'KeyA', 'KeyS', 'KeyD',
     'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
@@ -49,9 +50,11 @@
   }
 
   function sendInput(kind, code = '-') {
+    if (generation === null) return inputQueue;
+    const inputGeneration = generation;
     inputQueue = inputQueue.then(async () => {
       try {
-        const response = await fetch('/input', {
+        const response = await fetch(`/input?generation=${inputGeneration}`, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: `${client} ${kind} ${code}`,
@@ -61,6 +64,9 @@
         if (response.status === 204) {
           inputStatus.dataset.state = 'connected';
           inputStatus.textContent = 'Input: connected';
+        } else if (response.status === 412) {
+          inputStatus.dataset.state = 'waiting';
+          inputStatus.textContent = 'Input: waiting for the restarted game…';
         } else if (response.status === 409) {
           inputStatus.dataset.state = 'busy';
           inputStatus.textContent = 'Input: view only — another browser is controlling';
@@ -101,7 +107,7 @@
   addEventListener('blur', releaseAll);
   addEventListener('pagehide', () => {
     heldCodes.clear();
-    navigator.sendBeacon('/input', `${client} release -`);
+    if (generation !== null) navigator.sendBeacon(`/input?generation=${generation}`, `${client} release -`);
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) releaseAll();
@@ -115,6 +121,11 @@
       try {
         const response = await fetch(`/frame?after=${sequence}`, { cache: 'no-store' });
         const state = response.headers.get('X-Speck-State');
+        const nextGeneration = response.headers.get('X-Speck-Generation');
+        if (nextGeneration !== null && nextGeneration !== generation) {
+          generation = nextGeneration;
+          releaseAll();
+        }
         if (response.status === 200) {
           const rgb = new Uint8Array(await response.arrayBuffer());
           if (rgb.length !== rgbBytes || response.headers.get('X-Speck-Format') !== 'RGB8') {
@@ -129,6 +140,14 @@
           context.putImageData(image, 0, 0);
           sequence = Number(response.headers.get('X-Speck-Sequence'));
           setStatus('live', `Live — frame ${sequence}`);
+        } else if (response.status === 204 && ['building', 'error', 'watching'].includes(state)) {
+          const messages = {
+            building: 'Rebuilding…',
+            error: 'Build failed — see the terminal; watching for edits',
+            watching: 'Game stopped — watching for edits'
+          };
+          setStatus(state, messages[state]);
+          await new Promise(resolve => setTimeout(resolve, 250));
         } else if (response.status === 204 && state === 'stopped') {
           setStatus('stopped', 'Stopped — game process exited');
           await new Promise(resolve => setTimeout(resolve, 500));

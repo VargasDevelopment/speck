@@ -245,6 +245,22 @@ fn development(args: &[OsString]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if options.watch {
+        if path.extension().and_then(|value| value.to_str()) != Some("spk") {
+            eprintln!("error: Speck source files must use the `.spk` extension");
+            return ExitCode::from(2);
+        }
+        let result = toolchain::HostTarget::detect()
+            .and_then(toolchain::BuildEnvironment::discover)
+            .and_then(|environment| dev::watch(&path, &environment, &options));
+        return match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("error: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let program = match read_program(&path) {
         Ok(program) => program,
         Err(status) => return status,
@@ -282,6 +298,7 @@ fn parse_dev_args(args: &[OsString]) -> Result<(PathBuf, dev::Options), String> 
     while cursor < args.len() {
         let argument = args[cursor].to_string_lossy();
         match argument.as_ref() {
+            "--watch" => options.watch = true,
             "--bind" => {
                 cursor += 1;
                 let value = args
@@ -390,7 +407,7 @@ fn display_path(path: &Path) -> PathBuf {
 
 fn print_help() {
     println!(
-        "Speck — a tiny language for tiny games.\n\nUsage:\n  speck check <game.spk>\n  speck build <game.spk>\n  speck dev <game.spk> [--bind IP] [--port PORT] [--frames COUNT]\n  speck run <game.spk> [--frames COUNT]\n\nCommands:\n  check    Check source without native tools or build artifacts\n  build    Check, compile, and link a game with headless/PPM CRuMB\n  dev      Run a native game with the development browser presenter\n  run      Build and run a game with the native macOS Cocoa presenter"
+        "Speck — a tiny language for tiny games.\n\nUsage:\n  speck check <game.spk>\n  speck build <game.spk>\n  speck dev <game.spk> [--watch] [--bind IP] [--port PORT] [--frames COUNT]\n  speck run <game.spk> [--frames COUNT]\n\nCommands:\n  check    Check source without native tools or build artifacts\n  build    Check, compile, and link a game with headless/PPM CRuMB\n  dev      Run a native game with the development browser presenter\n  run      Build and run a game with the native macOS Cocoa presenter"
     );
 }
 
@@ -435,13 +452,16 @@ mod tests {
             .expect("default development arguments should parse");
         assert_eq!(source, PathBuf::from("game.spk"));
         assert_eq!(options.frame_limit, None);
+        assert!(!options.watch);
 
         let (_, options) = parse_dev_args(&[
             OsString::from("game.spk"),
+            OsString::from("--watch"),
             OsString::from("--frames"),
             OsString::from("3"),
         ])
         .expect("finite development arguments should parse");
         assert_eq!(options.frame_limit, Some(3));
+        assert!(options.watch);
     }
 }

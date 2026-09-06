@@ -1,13 +1,14 @@
 pub mod protocol;
 pub mod server;
+mod session;
+mod watch;
+pub use watch::run as watch;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::process::Child;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::toolchain::{self, BuildEnvironment};
 
@@ -17,6 +18,7 @@ pub struct Options {
     pub port: u16,
     pub port_explicit: bool,
     pub frame_limit: Option<u32>,
+    pub watch: bool,
 }
 
 impl Default for Options {
@@ -26,6 +28,7 @@ impl Default for Options {
             port: 8787,
             port_explicit: false,
             frame_limit: None,
+            watch: false,
         }
     }
 }
@@ -36,166 +39,42 @@ pub fn run(
     environment: &BuildEnvironment,
     options: &Options,
 ) -> Result<(), String> {
-    let artifacts = toolchain::build_for_development(source_path, llvm_ir, environment)?;
-    let http = server::bind_http(options.bind, options.port, !options.port_explicit)?;
-    let frame_listener = server::bind_frame_listener()?;
-    let frame_port = frame_listener
-        .local_addr()
-        .map_err(|error| format!("could not inspect frame receiver: {error}"))?
-        .port();
-
-    let frames = server::FrameStore::default();
-    let controls = server::InputControl::default();
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let interrupted = Arc::new(AtomicBool::new(false));
-    let (fatal_tx, fatal_rx) = mpsc::channel();
-    let http_thread = server::spawn_http_server(
-        http.listener,
-        frames.clone(),
-        controls.clone(),
-        shutdown.clone(),
-        fatal_tx.clone(),
-    );
-    let frame_thread = server::spawn_frame_receiver(
-        frame_listener,
-        frames.clone(),
-        controls.clone(),
-        shutdown.clone(),
-        fatal_tx,
-    );
-    let input_thread = server::spawn_input_watchdog(controls, shutdown.clone());
-
-    let interrupt_shutdown = shutdown.clone();
-    let interrupt_flag = interrupted.clone();
-    if let Err(error) = ctrlc::try_set_handler(move || {
-        interrupt_flag.store(true, Ordering::Release);
-        interrupt_shutdown.store(true, Ordering::Release);
-    }) {
-        shutdown.store(true, Ordering::Release);
-        frames.stop();
-        let _ = http_thread.join();
-        let _ = frame_thread.join();
-        let _ = input_thread.join();
-        return Err(format!("could not install Ctrl-C handler: {error}"));
-    }
-
-    let mut command = Command::new(&artifacts.executable);
-    command
-        .env("SPECK_FRAME_STREAM_PORT", frame_port.to_string())
-        .env_remove("SPECK_FRAME_LIMIT")
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    if let Some(limit) = options.frame_limit {
-        command.env("SPECK_FRAME_LIMIT", limit.to_string());
-    }
-    let child = command.spawn();
-    let mut child = match child {
-        Ok(child) => child,
-        Err(error) => {
-            shutdown.store(true, Ordering::Release);
-            frames.stop();
-            let _ = http_thread.join();
-            let _ = frame_thread.join();
-            let _ = input_thread.join();
-            return Err(format!(
-                "could not launch development game `{}`: {error}",
-                artifacts.executable.display()
-            ));
+    let mut session = session::Session::start(options)?;
+    let environment = environment.with_cancellation(session.cancelled.clone());
+    let result = (|| {
+        let artifacts = toolchain::build_for_development(source_path, llvm_ir, &environment)?;
+        if session.is_cancelled() {
+            return Ok(());
         }
-    };
-
-    if http.used_fallback_port {
-        println!(
-            "Port {} was unavailable; selected safe fallback port {}.",
-            options.port,
-            http.address.port()
-        );
-    }
-    if !options.bind.is_loopback() {
-        println!(
-            "Warning: development viewer explicitly bound to non-loopback address {}.",
-            options.bind
-        );
-    }
-    println!("Development game: {}", artifacts.executable.display());
-    match options.frame_limit {
-        Some(limit) => println!("Frame limit: {limit}"),
-        None => println!("Frame limit: unbounded (use Speck `quit()` or press Ctrl-C to stop)"),
-    }
-    println!("Viewer URL: {}", viewer_url(http.address));
-    if options.bind.is_loopback() {
-        println!(
-            "Remote access: ssh -L {0}:localhost:{0} <anfibio-host>",
-            http.address.port()
-        );
-        println!("Then open: http://localhost:{}/", http.address.port());
-    }
-
-    let mut fatal_error = None;
-    let mut interrupt_deadline = None;
-    let mut interrupt_error = None;
-    let status = loop {
-        if let Ok(error) = fatal_rx.try_recv() {
-            fatal_error = Some(error);
-            shutdown.store(true, Ordering::Release);
-        }
-        if interrupted.load(Ordering::Acquire) && interrupt_deadline.is_none() {
-            match interrupt_child(&child) {
-                Ok(()) => interrupt_deadline = Some(Instant::now() + Duration::from_secs(2)),
-                Err(error) => {
-                    interrupt_error = Some(error);
-                    terminate(&mut child);
-                }
+        session.launch(&artifacts.executable, options)?;
+        loop {
+            session.check_server()?;
+            if session.is_cancelled() {
+                break;
             }
-        } else if shutdown.load(Ordering::Acquire) && !interrupted.load(Ordering::Acquire) {
-            terminate(&mut child);
-        }
-        match child
-            .try_wait()
-            .map_err(|error| format!("could not inspect development game: {error}"))?
-        {
-            Some(status) => break status,
-            None => {
-                if interrupt_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                    terminate(&mut child);
-                    interrupt_error =
-                        Some("development game did not stop within two seconds of Ctrl-C".into());
+            if let Some(status) = session.poll_game()? {
+                session.stop_game()?;
+                if !status.success() {
+                    return Err(format!("development game exited with {status}"));
                 }
-                thread::sleep(Duration::from_millis(20));
+                println!(
+                    "Frames received: {}",
+                    session.frames.latest_sequence().unwrap_or(0)
+                );
+                println!("Development game stopped cleanly after streaming its final frame.");
+                return Ok(());
             }
+            thread::sleep(Duration::from_millis(20));
         }
-    };
-
-    shutdown.store(true, Ordering::Release);
-    frames.stop();
-    http_thread
-        .join()
-        .map_err(|_| "development HTTP server thread panicked".to_owned())?;
-    frame_thread
-        .join()
-        .map_err(|_| "frame receiver thread panicked".to_owned())?;
-    input_thread
-        .join()
-        .map_err(|_| "input watchdog thread panicked".to_owned())?;
-
-    let frames_received = frames.latest_sequence().unwrap_or(0);
-
-    if interrupted.load(Ordering::Acquire) {
-        if let Some(error) = interrupt_error {
-            return Err(error);
-        }
+        Ok(())
+    })();
+    session.stop_game()?;
+    if session.is_interrupted() {
         println!("Development game stopped cleanly after Ctrl-C.");
-        return Ok(());
+        Ok(())
+    } else {
+        result
     }
-    if let Some(error) = fatal_error.or_else(|| fatal_rx.try_recv().ok()) {
-        return Err(error);
-    }
-    if !status.success() {
-        return Err(format!("development game exited with {status}"));
-    }
-    println!("Frames received: {frames_received}");
-    println!("Development game stopped cleanly after streaming its final frame.");
-    Ok(())
 }
 
 fn terminate(child: &mut Child) {

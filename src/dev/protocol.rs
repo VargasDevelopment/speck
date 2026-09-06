@@ -272,6 +272,10 @@ fn read_first_byte(reader: &mut impl Read, byte: &mut u8) -> Result<bool, Protoc
             Ok(1) => return Ok(true),
             Ok(_) => unreachable!("the read buffer contains exactly one byte"),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            // Closing a full-duplex TCP connection with unread input can reset it. Between
+            // complete frames this is EOF; resets inside a header/payload remain truncation.
+            // The session separately observes the native process's exit status.
+            Err(error) if error.kind() == io::ErrorKind::ConnectionReset => return Ok(false),
             Err(error) => {
                 return Err(ProtocolError::new(format!(
                     "could not read frame header: {error}"
@@ -338,6 +342,30 @@ mod tests {
         (0..FRAME_PAYLOAD_BYTES)
             .map(|index| (index % 251) as u8)
             .collect()
+    }
+
+    #[test]
+    fn reset_between_frames_is_eof_but_partial_frames_still_fail() {
+        struct Reset;
+        impl Read for Reset {
+            fn read(&mut self, _bytes: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::from(io::ErrorKind::ConnectionReset))
+            }
+        }
+        assert_eq!(read_frame(&mut Reset).unwrap(), None);
+        let frame = encode_frame(1, &vec![17; FRAME_PAYLOAD_BYTES]).unwrap();
+        for length in [1, FRAME_HEADER_BYTES - 1, FRAME_HEADER_BYTES + 1] {
+            let mut stream = frame[..length].chain(Reset);
+            assert!(
+                read_frame(&mut stream)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("truncated")
+            );
+        }
+        let mut stream = frame.as_slice().chain(Reset);
+        assert_eq!(read_frame(&mut stream).unwrap().unwrap().sequence, 1);
+        assert_eq!(read_frame(&mut stream).unwrap(), None);
     }
 
     #[test]
