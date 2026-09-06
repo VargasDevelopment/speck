@@ -1,8 +1,9 @@
 # Language friction log
 
-Speck language work is driven by programs we genuinely try to write. This log
-keeps observed friction visible without treating every familiar language
-feature as an automatic requirement.
+This log preserves observations from earlier implementation slices; references
+to what came "next" describe that slice. BOOTS and Boots Ascent now exist. See
+the [roadmap](roadmap.md) for current priorities. Observed friction should
+guide language work without making every familiar feature a requirement.
 
 ## Resolved in the language-ergonomics slice
 
@@ -17,8 +18,8 @@ feature as an automatic requirement.
 ## Resolved in the modulo slice
 
 - Platformer sketches needed wrap and grid math, and the playground friction
-  log recorded "There's no modulo??". Statement-level `%` on `i32` operands,
-  plus `%=` compound assignment, now covers it. `%` shares division's
+  log recorded "There's no modulo??". The `%` operator on `i32` operands,
+  plus `%=` compound assignment statements, now covers it. `%` shares division's
   compile-time constant checks and runtime zero/overflow guard, and remains
   rejected for `f32` until a real sketch demands floating remainder.
 
