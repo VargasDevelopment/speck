@@ -51,6 +51,29 @@ or a game crash stops the server; a nonzero game status is reported. Debug
 output continues to use the game's stdout/stderr and never shares the binary
 frame/control channel.
 
+## Rebuild on save
+
+```sh
+speck dev game.spk --watch --port 8787
+```
+
+Watch mode keeps the same viewer URL and SSH tunnel while restarting the whole
+game after a save. It polls the contents of the root and imported source files,
+including missing imports, and waits briefly for saves to settle. Removing an
+import removes that file from the watched dependency set after a successful check.
+
+An edit stops the previous game before compilation. Invalid source leaves the
+viewer open with a build-failed message and prints file diagnostics in the terminal;
+fixing the source or creating a missing import restarts automatically. An initially
+missing or invalid root file is also recoverable. Saves during a native build are
+checked again before launch, so an outdated build does not replace newer edits.
+
+Game state and held input reset on each restart. A call to `quit()`, runtime failure,
+or `--frames N` completion leaves the watcher waiting for another edit; the frame
+limit applies to each run. Ctrl-C stops the watcher and its game or active native
+build, including compiler subprocesses. This is whole-game restart, without state
+preservation or incremental compilation.
+
 ## Deliberate non-local binding
 
 When both machines are on the same tailnet, the SSH tunnel remains the most
@@ -122,8 +145,13 @@ entire validated payload arrives.
 
 ## Browser input protocol
 
-The browser sends only `POST /input` requests with a `text/plain` body of at
-most 128 bytes. Each body has exactly three ASCII fields:
+The browser sends only `POST /input?generation=N` requests with a `text/plain` body of at
+most 128 bytes. `N` comes from the frame response's `X-Speck-Generation` header
+and is captured when the event is queued. The input controller rejects requests
+from older runs with HTTP 412 before they can acquire input ownership or affect
+the new game. The native input protocol is unchanged.
+
+Each body has exactly three ASCII fields:
 
 ```text
 <client-id> down <KeyboardEvent.code>

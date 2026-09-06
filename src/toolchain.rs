@@ -4,6 +4,9 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Arc, atomic::AtomicBool};
+
+mod process;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HostTarget {
@@ -117,7 +120,7 @@ impl fmt::Display for HostTarget {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct BuildEnvironment {
     target: HostTarget,
     clang: PathBuf,
@@ -125,6 +128,7 @@ pub struct BuildEnvironment {
     llvm_as: Option<PathBuf>,
     sdk_path: Option<PathBuf>,
     llvm_target_triple: String,
+    cancellation: Option<Arc<AtomicBool>>,
 }
 
 impl BuildEnvironment {
@@ -141,7 +145,22 @@ impl BuildEnvironment {
             llvm_as,
             sdk_path,
             llvm_target_triple,
+            cancellation: None,
         })
+    }
+
+    pub(crate) fn with_cancellation(&self, cancellation: Arc<AtomicBool>) -> Self {
+        Self {
+            cancellation: Some(cancellation),
+            ..self.clone()
+        }
+    }
+
+    fn command_output(&self, program: &Path, args: &[OsString]) -> Result<Output, String> {
+        match &self.cancellation {
+            Some(cancelled) => process::output(program, args, cancelled),
+            None => command_output(program, args),
+        }
     }
 
     pub fn target(&self) -> HostTarget {
@@ -395,7 +414,7 @@ fn validate_and_compile_ir(
             OsString::from("-o"),
             bitcode_path.as_os_str().to_owned(),
         ];
-        let assemble = command_output(llvm_as, &assemble_args)?;
+        let assemble = environment.command_output(llvm_as, &assemble_args)?;
         if assemble.status.success() {
             let mut compile_args = environment.target_args();
             compile_args.extend([
@@ -405,7 +424,7 @@ fn validate_and_compile_ir(
                 OsString::from("-o"),
                 object_path.as_os_str().to_owned(),
             ]);
-            let compile = command_output(&environment.clang, &compile_args)?;
+            let compile = environment.command_output(&environment.clang, &compile_args)?;
             if compile.status.success() {
                 return Ok(LlvmValidation::LlvmAs(llvm_as.clone()));
             }
@@ -459,7 +478,7 @@ fn clang_direct_fallback(
         OsString::from("-o"),
         bitcode_path.as_os_str().to_owned(),
     ]);
-    if let Err(clang_failure) = run(&environment.clang, validate_args) {
+    if let Err(clang_failure) = run(environment, &environment.clang, validate_args) {
         return Err(combine_failures(earlier_failure, clang_failure));
     }
 
@@ -473,7 +492,7 @@ fn clang_direct_fallback(
         OsString::from("-o"),
         object_path.as_os_str().to_owned(),
     ]);
-    if let Err(clang_failure) = run(&environment.clang, compile_args) {
+    if let Err(clang_failure) = run(environment, &environment.clang, compile_args) {
         return Err(combine_failures(earlier_failure, clang_failure));
     }
 
@@ -542,7 +561,7 @@ fn compile_runtime(
             OsString::from("-o"),
             object.as_os_str().to_owned(),
         ]);
-        run(&environment.clang, args)?;
+        run(environment, &environment.clang, args)?;
         objects.push(object);
     }
     Ok(objects)
@@ -567,7 +586,7 @@ fn link_executable(
     args.extend(presenter.link_args().iter().map(OsString::from));
     args.push(OsString::from("-o"));
     args.push(executable.as_os_str().to_owned());
-    run(&environment.clang, args)
+    run(environment, &environment.clang, args)
 }
 
 fn discover_clang(target: HostTarget) -> Result<PathBuf, String> {
@@ -700,7 +719,7 @@ fn missing_tool(tool: &str, checked: &[String], resolution: &str) -> String {
     )
 }
 
-fn run<I, S>(program: &Path, args: I) -> Result<(), String>
+fn run<I, S>(environment: &BuildEnvironment, program: &Path, args: I) -> Result<(), String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -709,7 +728,7 @@ where
         .into_iter()
         .map(|arg| arg.as_ref().to_owned())
         .collect();
-    let output = command_output(program, &args)?;
+    let output = environment.command_output(program, &args)?;
     if output.status.success() {
         Ok(())
     } else {

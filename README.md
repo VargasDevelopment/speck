@@ -120,7 +120,8 @@ game behavior remains user-authored Speck code.
 `speck dev` builds a separate `_dev` executable, starts its full-duplex native
 frame/control stream and a local HTTP viewer, and prints the exact viewer URL.
 It runs without a frame limit by default and binds only to `127.0.0.1` unless
-`--bind` is supplied explicitly. `--frames N` keeps automation bounded. See the
+`--bind` is supplied explicitly. Add `--watch` to rebuild and restart on source or
+import edits while keeping the same browser URL. `--frames N` keeps automation bounded. See the
 [development viewer guide](docs/development-viewer.md) for remote access over
 an SSH tunnel, frame limits, and the transport protocol.
 
@@ -145,7 +146,8 @@ syntax highlighting and basic editing for `.spk` files.
 
 This is an honest small compiler/runtime slice, not a general-purpose language
 or a finished tiny-game platform. There is no heap, garbage collector, audio,
-dynamic arrays, slices, modules, or asset system. Fixed-size explicitly typed
+dynamic arrays, slices, or asset system. Relative file imports provide modules
+with qualified names; there is no package manager. Fixed-size explicitly typed
 arrays use native value storage and checked `i32` indexing. Named structs are
 fixed-layout values with no object runtime; the two aggregate forms compose
 recursively for allocation-free level data. A narrow `for i in lower..upper`
