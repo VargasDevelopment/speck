@@ -243,7 +243,8 @@ print with `print_i32(i32(sin(1.0) * 100.0))` measured **34,824 bytes**: an
 2026-09-06 measurements use the same source layout and default build flags;
 they are not a universal per-call cost. The unused wrapper is dead-stripped.
 
-Linux links the standard math library (`-lm`) for `sinf`; macOS provides it
+Linux links the standard math library (`-lm`) with `--as-needed`, retaining
+it only when a game uses `sinf`; macOS provides it
 through libSystem. A game using sine therefore depends on the host math
 library rather than shipping a private approximation. The [Linux C library
 reference](https://www.man7.org/linux/man-pages/man3/sinf.3.html) documents

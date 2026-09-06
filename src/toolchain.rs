@@ -84,7 +84,12 @@ impl HostTarget {
 
     fn link_args(self) -> &'static [&'static str] {
         match self {
-            Self::LinuxX86_64 => &["-fuse-ld=lld", "-Wl,--gc-sections,--strip-all", "-lm"],
+            Self::LinuxX86_64 => &[
+                "-fuse-ld=lld",
+                "-Wl,--gc-sections,--strip-all",
+                "-Wl,--as-needed",
+                "-lm",
+            ],
             Self::MacOsArm64 => &["-Wl,-dead_strip,-S,-x"],
         }
     }
@@ -779,7 +784,12 @@ mod tests {
         assert_eq!(target.executable_extension(), "");
         assert_eq!(
             target.link_args(),
-            ["-fuse-ld=lld", "-Wl,--gc-sections,--strip-all", "-lm"]
+            [
+                "-fuse-ld=lld",
+                "-Wl,--gc-sections,--strip-all",
+                "-Wl,--as-needed",
+                "-lm"
+            ]
         );
         assert!(target.c_compile_args().contains(&"-ffunction-sections"));
         assert_eq!(target.runtime_platform_sources(), ["platform/posix_main.c"]);

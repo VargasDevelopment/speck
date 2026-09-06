@@ -57,3 +57,27 @@ fn sine_uses_the_existing_builtin_type_and_constant_boundaries() {
         assert!(speck::analyze(&source).is_err(), "accepted {declaration}");
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_keeps_the_math_library_only_for_sine_callers() {
+    for (body, uses_sine) in [("print_i32(0)", false), ("print_i32(i32(sin(1.0)))", true)] {
+        let work = support::workspace();
+        let source = work.path().join("dependencies.spk");
+        fs::write(
+            &source,
+            format!("game \"Dependencies\" start {{ {body} }} update(dt: f32) {{}} draw {{}}"),
+        )
+        .unwrap();
+        let executable = support::build_in(work.path(), &source);
+        let output = support::run(Command::new("readelf").arg("--dynamic").arg(executable));
+        support::assert_success("ELF dynamic dependencies", &output);
+        let dependencies = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            dependencies.contains("libm.so.6"),
+            uses_sine,
+            "{dependencies}"
+        );
+        assert!(dependencies.contains("libc.so.6"), "{dependencies}");
+    }
+}
