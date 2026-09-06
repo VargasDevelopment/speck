@@ -173,59 +173,9 @@ impl Parser {
                 kind: ExprKind::Bool(matches!(token.kind, TokenKind::True)),
                 span: token.span,
             }),
-            TokenKind::LeftBracket => {
-                let mut elements = Vec::new();
-                if !self.at(&TokenKind::RightBracket) {
-                    loop {
-                        elements.push(self.expression()?);
-                        if !self.take(&TokenKind::Comma) {
-                            break;
-                        }
-                        if self.at(&TokenKind::RightBracket) {
-                            break;
-                        }
-                    }
-                }
-                let end = self
-                    .expect(&TokenKind::RightBracket, "expected `]` after array literal")?
-                    .span;
-                self.checked(Expr {
-                    kind: ExprKind::ArrayLiteral(elements),
-                    span: token.span.merge(end),
-                })
-            }
-            TokenKind::Identifier(name) => {
-                if self.looks_like_struct_literal(&name) {
-                    return self.struct_literal(name, token.span);
-                }
-                if !self.take(&TokenKind::LeftParen) {
-                    return self.checked(Expr {
-                        kind: ExprKind::Variable(name),
-                        span: token.span,
-                    });
-                }
-                let (args, end) = self.arguments()?;
-                self.checked(Expr {
-                    kind: ExprKind::Call { name, args },
-                    span: token.span.merge(end),
-                })
-            }
-            TokenKind::I32 | TokenKind::F32 => {
-                let target = if matches!(token.kind, TokenKind::I32) {
-                    ValueType::I32
-                } else {
-                    ValueType::F32
-                };
-                self.expect(
-                    &TokenKind::LeftParen,
-                    "expected `(` after numeric conversion type",
-                )?;
-                let (args, end) = self.arguments()?;
-                self.checked(Expr {
-                    kind: ExprKind::Conversion { target, args },
-                    span: token.span.merge(end),
-                })
-            }
+            TokenKind::LeftBracket => self.array_literal(token.span),
+            TokenKind::Identifier(name) => self.named_expression(name, token.span),
+            TokenKind::I32 | TokenKind::F32 => self.conversion(token),
             TokenKind::LeftParen => {
                 let mut expression = self.expression()?;
                 let end = self
@@ -236,6 +186,63 @@ impl Parser {
             }
             _ => Err(Diagnostic::new("expected an expression", token.span)),
         }
+    }
+
+    fn array_literal(&mut self, start: Span) -> Result<Expr, Diagnostic> {
+        let mut elements = Vec::new();
+        if !self.at(&TokenKind::RightBracket) {
+            loop {
+                elements.push(self.expression()?);
+                if !self.take(&TokenKind::Comma) {
+                    break;
+                }
+                if self.at(&TokenKind::RightBracket) {
+                    break;
+                }
+            }
+        }
+        let end = self
+            .expect(&TokenKind::RightBracket, "expected `]` after array literal")?
+            .span;
+        self.checked(Expr {
+            kind: ExprKind::ArrayLiteral(elements),
+            span: start.merge(end),
+        })
+    }
+
+    fn conversion(&mut self, token: crate::lexer::Token) -> Result<Expr, Diagnostic> {
+        let target = if matches!(token.kind, TokenKind::I32) {
+            ValueType::I32
+        } else {
+            ValueType::F32
+        };
+        self.expect(
+            &TokenKind::LeftParen,
+            "expected `(` after numeric conversion type",
+        )?;
+        let (args, end) = self.arguments()?;
+        self.checked(Expr {
+            kind: ExprKind::Conversion { target, args },
+            span: token.span.merge(end),
+        })
+    }
+
+    fn named_expression(&mut self, name: String, start: Span) -> Result<Expr, Diagnostic> {
+        let (name, name_span) = self.qualified_name(name, start)?;
+        if self.looks_like_struct_literal(&name) {
+            return self.struct_literal(name, name_span);
+        }
+        if !self.take(&TokenKind::LeftParen) {
+            return self.checked(Expr {
+                kind: ExprKind::Variable(name),
+                span: name_span,
+            });
+        }
+        let (args, end) = self.arguments()?;
+        self.checked(Expr {
+            kind: ExprKind::Call { name, args },
+            span: start.merge(end),
+        })
     }
 
     fn struct_literal(&mut self, name: String, start: Span) -> Result<Expr, Diagnostic> {

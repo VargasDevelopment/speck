@@ -1,5 +1,4 @@
 use std::ffi::OsString;
-use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
@@ -8,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::{analyze, compile_to_llvm_for_target, dev, render_diagnostics, toolchain};
+use crate::{CheckedProgram, analyze_path, codegen, dev, toolchain};
 
 pub fn run(args: impl IntoIterator<Item = OsString>) -> ExitCode {
     let args: Vec<OsString> = args.into_iter().collect();
@@ -37,19 +36,12 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> ExitCode {
 }
 
 fn check(path: &Path) -> ExitCode {
-    let source = match read_source(path) {
-        Ok(source) => source,
-        Err(status) => return status,
-    };
-    match analyze(&source) {
+    match read_program(path) {
         Ok(_) => {
             println!("Checked: {}", display_path(path).display());
             ExitCode::SUCCESS
         }
-        Err(diagnostics) => {
-            eprintln!("{}", render_diagnostics(path, &source, &diagnostics));
-            ExitCode::FAILURE
-        }
+        Err(status) => status,
     }
 }
 
@@ -66,8 +58,8 @@ fn native(args: &[OsString]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let source = match read_source(&path) {
-        Ok(source) => source,
+    let program = match read_program(&path) {
+        Ok(program) => program,
         Err(status) => return status,
     };
     let host_target = match toolchain::HostTarget::detect() {
@@ -92,13 +84,7 @@ fn native(args: &[OsString]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let llvm_ir = match compile_to_llvm_for_target(&source, environment.llvm_target_triple()) {
-        Ok(llvm_ir) => llvm_ir,
-        Err(diagnostics) => {
-            eprintln!("{}", render_diagnostics(&path, &source, &diagnostics));
-            return ExitCode::FAILURE;
-        }
-    };
+    let llvm_ir = codegen::llvm::emit_for_target(&program, Some(environment.llvm_target_triple()));
     let artifacts = match toolchain::build_for_native(&path, &llvm_ir, &environment) {
         Ok(artifacts) => artifacts,
         Err(error) => {
@@ -258,8 +244,8 @@ fn development(args: &[OsString]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let source = match read_source(&path) {
-        Ok(source) => source,
+    let program = match read_program(&path) {
+        Ok(program) => program,
         Err(status) => return status,
     };
     let host_target = match toolchain::HostTarget::detect() {
@@ -276,13 +262,7 @@ fn development(args: &[OsString]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let llvm_ir = match compile_to_llvm_for_target(&source, environment.llvm_target_triple()) {
-        Ok(llvm_ir) => llvm_ir,
-        Err(diagnostics) => {
-            eprintln!("{}", render_diagnostics(&path, &source, &diagnostics));
-            return ExitCode::FAILURE;
-        }
-    };
+    let llvm_ir = codegen::llvm::emit_for_target(&program, Some(environment.llvm_target_triple()));
 
     match dev::run(&path, &llvm_ir, &environment, &options) {
         Ok(()) => ExitCode::SUCCESS,
@@ -347,8 +327,8 @@ fn parse_dev_args(args: &[OsString]) -> Result<(PathBuf, dev::Options), String> 
 }
 
 fn build(path: &Path) -> ExitCode {
-    let source = match read_source(path) {
-        Ok(source) => source,
+    let program = match read_program(path) {
+        Ok(program) => program,
         Err(status) => return status,
     };
     let host_target = match toolchain::HostTarget::detect() {
@@ -365,13 +345,7 @@ fn build(path: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let llvm_ir = match compile_to_llvm_for_target(&source, environment.llvm_target_triple()) {
-        Ok(llvm_ir) => llvm_ir,
-        Err(diagnostics) => {
-            eprintln!("{}", render_diagnostics(path, &source, &diagnostics));
-            return ExitCode::FAILURE;
-        }
-    };
+    let llvm_ir = codegen::llvm::emit_for_target(&program, Some(environment.llvm_target_triple()));
     match toolchain::build(path, &llvm_ir, &environment) {
         Ok(artifacts) => {
             println!("Built: {}", display_path(&artifacts.executable).display());
@@ -395,13 +369,13 @@ fn build(path: &Path) -> ExitCode {
     }
 }
 
-fn read_source(path: &Path) -> Result<String, ExitCode> {
+fn read_program(path: &Path) -> Result<CheckedProgram, ExitCode> {
     if path.extension().and_then(|extension| extension.to_str()) != Some("spk") {
         eprintln!("error: Speck source files must use the `.spk` extension");
         return Err(ExitCode::from(2));
     }
-    fs::read_to_string(path).map_err(|error| {
-        eprintln!("error: could not read `{}`: {error}", path.display());
+    analyze_path(path).map_err(|error| {
+        eprintln!("{error}");
         ExitCode::FAILURE
     })
 }

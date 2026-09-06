@@ -325,7 +325,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
             diagnostics.push(error);
         }
     }
-    let evaluated_constants = evaluator.values.clone();
+    let evaluated_constants = evaluator.values().clone();
     for constant in &mut program.constants {
         constant.value = evaluated_constants.get(&constant.name).cloned();
     }
@@ -1350,15 +1350,12 @@ impl<'a> FunctionChecker<'a> {
     }
 
     fn check_constant_index(&mut self, index: &Expr, length: usize) {
-        let result = evaluate_expression(index, |name| {
+        let result = evaluate_expression(index, |name, span| {
             self.binding(name)
                 .filter(|binding| binding.mutability == Mutability::Constant)
                 .and_then(|_| self.constant_values.get(name).cloned())
                 .ok_or_else(|| {
-                    Diagnostic::new(
-                        format!("`{name}` is not a compile-time constant"),
-                        index.span,
-                    )
+                    Diagnostic::new(format!("`{name}` is not a compile-time constant"), span)
                 })
         });
         let Ok(ConstantValue::I32(value)) = result else {

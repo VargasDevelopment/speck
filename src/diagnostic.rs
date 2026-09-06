@@ -1,18 +1,33 @@
 use std::path::Path;
 
+use crate::source::SourceId;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Span {
+    pub source: SourceId,
     pub start: usize,
     pub end: usize,
 }
 
 impl Span {
     pub const fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
+        Self {
+            source: SourceId::DEFAULT,
+            start,
+            end,
+        }
     }
 
     pub const fn merge(self, other: Self) -> Self {
-        Self::new(self.start, other.end)
+        assert!(
+            self.source.0 == other.source.0,
+            "cannot merge spans from different files"
+        );
+        Self {
+            source: self.source,
+            start: self.start,
+            end: other.end,
+        }
     }
 }
 
@@ -31,7 +46,10 @@ impl Diagnostic {
     }
 
     pub fn render(&self, path: &Path, source: &str) -> String {
-        let start = self.span.start.min(source.len());
+        let mut start = self.span.start.min(source.len());
+        while !source.is_char_boundary(start) {
+            start -= 1;
+        }
         let line_start = source[..start].rfind('\n').map_or(0, |index| index + 1);
         let line_end = source[start..]
             .find('\n')
@@ -45,12 +63,11 @@ impl Diagnostic {
         let line = &source[line_start..line_end];
         let marker_offset = source[line_start..start].chars().count();
         let available = line_end.saturating_sub(start);
-        let marker_len = self
-            .span
-            .end
-            .saturating_sub(self.span.start)
-            .min(available)
-            .max(1);
+        let mut end = start + self.span.end.saturating_sub(self.span.start).min(available);
+        while !source.is_char_boundary(end) {
+            end -= 1;
+        }
+        let marker_len = source[start..end].chars().count().max(1);
         let gutter_width = line_number.to_string().len();
 
         format!(

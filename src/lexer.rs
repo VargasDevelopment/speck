@@ -13,6 +13,8 @@ pub enum TokenKind {
     Integer(i64),
     Float(f32),
     Game,
+    Import,
+    As,
     Let,
     Const,
     Start,
@@ -41,6 +43,7 @@ pub enum TokenKind {
     Dot,
     DotDot,
     Colon,
+    ColonColon,
     Comma,
     Semicolon,
     Plus,
@@ -69,6 +72,23 @@ pub enum TokenKind {
 
 pub fn lex(source: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
     Lexer::new(source).run()
+}
+
+/// Lex one file, preserving file-local byte offsets in every span.
+pub fn lex_in(source: &str, id: crate::source::SourceId) -> Result<Vec<Token>, Vec<Diagnostic>> {
+    lex(source)
+        .map(|mut tokens| {
+            for token in &mut tokens {
+                token.span.source = id;
+            }
+            tokens
+        })
+        .map_err(|mut diagnostics| {
+            for diagnostic in &mut diagnostics {
+                diagnostic.span.source = id;
+            }
+            diagnostics
+        })
 }
 
 struct Lexer<'a> {
@@ -104,6 +124,7 @@ impl<'a> Lexer<'a> {
                 b']' => self.simple(TokenKind::RightBracket, start),
                 b'.' if self.take(b'.') => self.push(TokenKind::DotDot, start),
                 b'.' => self.simple(TokenKind::Dot, start),
+                b':' if self.take(b':') => self.push(TokenKind::ColonColon, start),
                 b':' => self.simple(TokenKind::Colon, start),
                 b',' => self.simple(TokenKind::Comma, start),
                 b';' => self.simple(TokenKind::Semicolon, start),
@@ -257,6 +278,8 @@ impl<'a> Lexer<'a> {
         let text = &self.source[start..self.cursor];
         let kind = match text {
             "game" => TokenKind::Game,
+            "import" => TokenKind::Import,
+            "as" => TokenKind::As,
             "let" => TokenKind::Let,
             "const" => TokenKind::Const,
             "start" => TokenKind::Start,
