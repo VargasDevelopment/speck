@@ -196,14 +196,14 @@ draw {}
 }
 
 #[test]
-fn arrays_are_deliberately_rejected_in_function_signatures() {
+fn array_function_signatures_require_matching_lengths() {
     assert_error(
-        "game \"Bad\"\nfn first(values: [i32; 2]) -> i32 { return values[0] }\nstart {}\nupdate(dt: f32) {}\ndraw {}\n",
-        "arrays are not supported as function parameters yet",
+        "game \"Bad\"\nfn first(values: [i32; 2]) -> i32 { return values[0] }\nstart { let items: [i32; 1] = [1] print_i32(first(items)) }\nupdate(dt: f32) {}\ndraw {}\n",
+        "argument 1 to `first` expects `[i32; 2]`, but found `[i32; 1]`",
     );
     assert_error(
-        "game \"Bad\"\nfn values() -> [i32; 2] { return [1, 2] }\nstart {}\nupdate(dt: f32) {}\ndraw {}\n",
-        "arrays are not supported as function return types yet",
+        "game \"Bad\"\nfn values() -> [i32; 2] { return [1] }\nstart {}\nupdate(dt: f32) {}\ndraw {}\n",
+        "expected array length 2, found 1 elements",
     );
 }
 
