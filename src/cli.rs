@@ -84,7 +84,8 @@ fn native(args: &[OsString]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let llvm_ir = codegen::llvm::emit_for_target(&program, Some(environment.llvm_target_triple()));
+    let llvm_ir =
+        codegen::llvm::emit_for_development(&program, Some(environment.llvm_target_triple()));
     let artifacts = match toolchain::build_for_native(&path, &llvm_ir, &environment) {
         Ok(artifacts) => artifacts,
         Err(error) => {
@@ -262,7 +263,8 @@ fn development(args: &[OsString]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let llvm_ir = codegen::llvm::emit_for_target(&program, Some(environment.llvm_target_triple()));
+    let llvm_ir =
+        codegen::llvm::emit_for_development(&program, Some(environment.llvm_target_triple()));
 
     match dev::run(&path, &llvm_ir, &environment, &options) {
         Ok(()) => ExitCode::SUCCESS,

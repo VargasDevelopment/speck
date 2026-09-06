@@ -175,3 +175,9 @@ development checks and project guidelines.
 ## License
 
 Speck is available under the [MIT License](LICENSE).
+
+Development `dev` and native `run` builds identify bounds, integer division,
+and remainder failures with the original Speck file, line, and column, including
+imported modules. Locations name the failing indexed or arithmetic expression
+(or assignment target for compound arithmetic). Ordinary `build` output omits
+source paths and location reporting.

@@ -200,3 +200,22 @@ ssh -L <printed-port>:localhost:<printed-port> anfibio
 A/D and arrows move, Space toggles once per press, and Escape calls `quit()` in
 the example. Presenter-specific key codes never enter Speck. Movement rules and
 all later game mechanics remain user-authored `.spk` code.
+
+## Runtime failure locations
+
+Development builds retain source paths for failed bounds and integer
+division/remainder guards. The terminal reports `path:line:column:` before the
+existing failure message, including operations in imported modules. Lines and
+Unicode character columns are one-based. Indexing points to the indexed
+expression; arithmetic points to its expression or compound-assignment target.
+
+Source reporting runs only in the failing branch and does not change operand
+evaluation or the guard itself. Native `speck run` uses the same locations.
+Ordinary `speck build` and the default LLVM emitter omit these paths and calls;
+they keep the existing failure messages. This is source reporting for guarded
+operations, not stack traces or general debug metadata.
+
+On macOS ARM64, a minimal `print_i32(0)` program built to 34,744 bytes both
+before and after this change with ordinary `speck build`. Located builds
+intentionally retain paths used by their guard failures; their size depends on
+the program and source paths.
