@@ -159,8 +159,9 @@ cargo test --all-targets
 - Runtime floating arithmetic follows LLVM/IEEE behavior and may produce
   infinities or NaNs. Float-to-integer conversion already checks NaN and both
   range boundaries before `fptosi`.
-- Arrays remain unsupported as function parameters and return types. Structs,
-  including structs that contain arrays, are passed and returned by value.
+- Fixed arrays and structs are passed and returned by value. Copies cost
+  proportionally to their size; there are no references, slices, or
+  length-polymorphic parameters.
 - The failure ABI terminates today. Recovery, stack unwinding, cleanup, and
   catch syntax were deliberately left for a coherent future exception design.
 - CI covers the two supported host architectures, but its macOS job does not

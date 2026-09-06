@@ -185,8 +185,7 @@ Arrays use ordinary value storage. Locals live in function storage, mutable
 globals use fixed LLVM globals, and immutable aggregate constants use
 read-only LLVM global storage. No array object, length header, heap allocation,
 or garbage collector is involved. Whole-array assignment between values of
-the same array type copies the complete value. Arrays are not yet accepted as
-function parameter or return types.
+the same array type copies the complete value.
 
 Index expressions accept only `i32`:
 
