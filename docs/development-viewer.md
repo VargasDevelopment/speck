@@ -187,7 +187,7 @@ record sent over the reverse direction of the existing loopback TCP socket:
 | 0 | 4 | Magic | ASCII `SPKI` |
 | 4 | 1 | Version | `1` |
 | 5 | 1 | Kind | `1` key transition, `2` release-all |
-| 6 | 1 | Key | CRuMB identifier `0` through `10`; zero for release-all |
+| 6 | 1 | Key | Stable CRuMB identifier from `runtime/crumb/keys.def`; zero for release-all |
 | 7 | 1 | State | `0` up, `1` down; zero for release-all |
 
 The C stream presenter accumulates partial records, validates every field, and
