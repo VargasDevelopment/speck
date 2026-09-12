@@ -8,18 +8,10 @@ enum crumb_present_result {
 };
 
 enum crumb_key {
-    CRUMB_KEY_W = 0,
-    CRUMB_KEY_A = 1,
-    CRUMB_KEY_S = 2,
-    CRUMB_KEY_D = 3,
-    CRUMB_KEY_UP = 4,
-    CRUMB_KEY_DOWN = 5,
-    CRUMB_KEY_LEFT = 6,
-    CRUMB_KEY_RIGHT = 7,
-    CRUMB_KEY_SPACE = 8,
-    CRUMB_KEY_ENTER = 9,
-    CRUMB_KEY_ESCAPE = 10,
-    CRUMB_KEY_COUNT = 11
+#define SPECK_KEY(suffix, variant, id, browser, macos, modifier) CRUMB_KEY_##suffix = id,
+#include "keys.def"
+#undef SPECK_KEY
+    CRUMB_KEY_COUNT
 };
 
 void crumb_audio_init(void);

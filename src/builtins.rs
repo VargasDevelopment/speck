@@ -82,67 +82,26 @@ pub const FUNCTIONS: &[BuiltinFunction] = &[
     },
 ];
 
-const KEY_CONSTANTS: &[PredefinedConstant] = &[
-    PredefinedConstant {
-        name: "KEY_W",
-        value: ConstantValue::I32(0),
-    },
-    PredefinedConstant {
-        name: "KEY_A",
-        value: ConstantValue::I32(1),
-    },
-    PredefinedConstant {
-        name: "KEY_S",
-        value: ConstantValue::I32(2),
-    },
-    PredefinedConstant {
-        name: "KEY_D",
-        value: ConstantValue::I32(3),
-    },
-    PredefinedConstant {
-        name: "KEY_UP",
-        value: ConstantValue::I32(4),
-    },
-    PredefinedConstant {
-        name: "KEY_DOWN",
-        value: ConstantValue::I32(5),
-    },
-    PredefinedConstant {
-        name: "KEY_LEFT",
-        value: ConstantValue::I32(6),
-    },
-    PredefinedConstant {
-        name: "KEY_RIGHT",
-        value: ConstantValue::I32(7),
-    },
-    PredefinedConstant {
-        name: "KEY_SPACE",
-        value: ConstantValue::I32(8),
-    },
-    PredefinedConstant {
-        name: "KEY_ENTER",
-        value: ConstantValue::I32(9),
-    },
-    PredefinedConstant {
-        name: "KEY_ESCAPE",
-        value: ConstantValue::I32(10),
-    },
-];
-
 /// All predefined values for one game's logical framebuffer.
 pub fn constants(
     resolution: crate::resolution::Resolution,
 ) -> impl Iterator<Item = PredefinedConstant> {
-    KEY_CONSTANTS.iter().cloned().chain([
-        PredefinedConstant {
-            name: "FRAMEBUFFER_WIDTH",
-            value: ConstantValue::I32(i32::from(resolution.width())),
-        },
-        PredefinedConstant {
-            name: "FRAMEBUFFER_HEIGHT",
-            value: ConstantValue::I32(i32::from(resolution.height())),
-        },
-    ])
+    crate::keyboard::KEYS
+        .iter()
+        .map(|info| PredefinedConstant {
+            name: info.name,
+            value: ConstantValue::I32(info.key as i32),
+        })
+        .chain([
+            PredefinedConstant {
+                name: "FRAMEBUFFER_WIDTH",
+                value: ConstantValue::I32(i32::from(resolution.width())),
+            },
+            PredefinedConstant {
+                name: "FRAMEBUFFER_HEIGHT",
+                value: ConstantValue::I32(i32::from(resolution.height())),
+            },
+        ])
 }
 
 pub fn is_predefined_constant(name: &str) -> bool {

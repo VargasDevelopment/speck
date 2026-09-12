@@ -1,3 +1,4 @@
+pub use crate::keyboard::Key;
 use crate::resolution::Resolution;
 use std::fmt;
 use std::io::{self, Read};
@@ -18,58 +19,6 @@ const CONTROL_MAGIC: &[u8; 4] = b"SPKI";
 const CONTROL_VERSION: u8 = 1;
 const CONTROL_KEY: u8 = 1;
 const CONTROL_RELEASE_ALL: u8 = 2;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum Key {
-    W = 0,
-    A = 1,
-    S = 2,
-    D = 3,
-    Up = 4,
-    Down = 5,
-    Left = 6,
-    Right = 7,
-    Space = 8,
-    Enter = 9,
-    Escape = 10,
-}
-
-impl Key {
-    fn from_id(id: u8) -> Option<Self> {
-        Some(match id {
-            0 => Self::W,
-            1 => Self::A,
-            2 => Self::S,
-            3 => Self::D,
-            4 => Self::Up,
-            5 => Self::Down,
-            6 => Self::Left,
-            7 => Self::Right,
-            8 => Self::Space,
-            9 => Self::Enter,
-            10 => Self::Escape,
-            _ => return None,
-        })
-    }
-
-    fn from_browser_code(code: &str) -> Option<Self> {
-        Some(match code {
-            "KeyW" => Self::W,
-            "KeyA" => Self::A,
-            "KeyS" => Self::S,
-            "KeyD" => Self::D,
-            "ArrowUp" => Self::Up,
-            "ArrowDown" => Self::Down,
-            "ArrowLeft" => Self::Left,
-            "ArrowRight" => Self::Right,
-            "Space" => Self::Space,
-            "Enter" => Self::Enter,
-            "Escape" => Self::Escape,
-            _ => return None,
-        })
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ControlMessage {
@@ -482,6 +431,41 @@ mod tests {
     }
 
     #[test]
+    fn browser_keys_keep_their_wire_ids_and_round_trip_both_transitions() {
+        for (code, key, id) in [
+            ("KeyW", Key::W, 0),
+            ("KeyA", Key::A, 1),
+            ("KeyS", Key::S, 2),
+            ("KeyD", Key::D, 3),
+            ("ArrowUp", Key::Up, 4),
+            ("ArrowDown", Key::Down, 5),
+            ("ArrowLeft", Key::Left, 6),
+            ("ArrowRight", Key::Right, 7),
+            ("Space", Key::Space, 8),
+            ("Enter", Key::Enter, 9),
+            ("Escape", Key::Escape, 10),
+            ("KeyF", Key::F, 11),
+        ] {
+            for (kind, down) in [("down", true), ("up", false)] {
+                let body = format!("viewer-1 {kind} {code}");
+                assert_eq!(
+                    parse_browser_input(body.as_bytes()).unwrap(),
+                    BrowserInput::Key {
+                        client: "viewer-1".into(),
+                        key,
+                        down
+                    }
+                );
+                let message = ControlMessage::Key { key, down };
+                let encoded = encode_control(message);
+                assert_eq!(encoded, [b'S', b'P', b'K', b'I', 1, 1, id, u8::from(down)]);
+                assert_eq!(decode_control(&encoded).unwrap(), message);
+            }
+        }
+        assert!(decode_control(&[b'S', b'P', b'K', b'I', 1, 1, 255, 1]).is_err());
+    }
+
+    #[test]
     fn rejects_malformed_truncated_and_oversized_input_messages() {
         assert!(decode_control(b"SPKI").is_err());
         let mut invalid = encode_control(ControlMessage::ReleaseAll);
@@ -520,7 +504,7 @@ mod tests {
             }
         );
         assert!(matches!(
-            parse_browser_input(b"viewer-1 down KeyQ").expect("unsupported key should be safe"),
+            parse_browser_input(b"viewer-1 down CapsLock").expect("unsupported key should be safe"),
             BrowserInput::UnsupportedKey { .. }
         ));
     }

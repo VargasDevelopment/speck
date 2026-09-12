@@ -11,49 +11,29 @@ static NSView *crumb_view = nil;
 static NSObject<NSWindowDelegate> *crumb_window_delegate = nil;
 static int crumb_window_closed = 0;
 
-enum crumb_macos_key_code {
-    CRUMB_MAC_KEY_A = 0,
-    CRUMB_MAC_KEY_S = 1,
-    CRUMB_MAC_KEY_D = 2,
-    CRUMB_MAC_KEY_W = 13,
-    CRUMB_MAC_KEY_ENTER = 36,
-    CRUMB_MAC_KEY_SPACE = 49,
-    CRUMB_MAC_KEY_ESCAPE = 53,
-    CRUMB_MAC_KEY_KEYPAD_ENTER = 76,
-    CRUMB_MAC_KEY_LEFT = 123,
-    CRUMB_MAC_KEY_RIGHT = 124,
-    CRUMB_MAC_KEY_DOWN = 125,
-    CRUMB_MAC_KEY_UP = 126
+struct crumb_macos_key_mapping {
+    unsigned short code;
+    unsigned int modifier_mask;
+};
+
+static const struct crumb_macos_key_mapping crumb_macos_keys[CRUMB_KEY_COUNT] = {
+#define SPECK_KEY(suffix, variant, id, browser, macos, modifier) \
+    [CRUMB_KEY_##suffix] = {macos, modifier},
+#include "keys.def"
+#undef SPECK_KEY
 };
 
 static int crumb_key_for_macos_code(unsigned short key_code) {
-    switch (key_code) {
-    case CRUMB_MAC_KEY_W:
-        return CRUMB_KEY_W;
-    case CRUMB_MAC_KEY_A:
-        return CRUMB_KEY_A;
-    case CRUMB_MAC_KEY_S:
-        return CRUMB_KEY_S;
-    case CRUMB_MAC_KEY_D:
-        return CRUMB_KEY_D;
-    case CRUMB_MAC_KEY_UP:
-        return CRUMB_KEY_UP;
-    case CRUMB_MAC_KEY_DOWN:
-        return CRUMB_KEY_DOWN;
-    case CRUMB_MAC_KEY_LEFT:
-        return CRUMB_KEY_LEFT;
-    case CRUMB_MAC_KEY_RIGHT:
-        return CRUMB_KEY_RIGHT;
-    case CRUMB_MAC_KEY_SPACE:
-        return CRUMB_KEY_SPACE;
-    case CRUMB_MAC_KEY_ENTER:
-    case CRUMB_MAC_KEY_KEYPAD_ENTER:
-        return CRUMB_KEY_ENTER;
-    case CRUMB_MAC_KEY_ESCAPE:
-        return CRUMB_KEY_ESCAPE;
-    default:
+    /* 65535 is the catalog's unavailable sentinel, never an event mapping. */
+    if (key_code == 65535) {
         return -1;
     }
+    for (int key = 0; key < CRUMB_KEY_COUNT; key += 1) {
+        if (crumb_macos_keys[key].code == key_code) {
+            return key;
+        }
+    }
+    return -1;
 }
 
 @interface CrumbFramebufferView : NSView
@@ -85,6 +65,19 @@ static int crumb_key_for_macos_code(unsigned short key_code) {
         return;
     }
     [super keyUp:event];
+}
+
+- (void)flagsChanged:(NSEvent *)event {
+    const int key = crumb_key_for_macos_code([event keyCode]);
+
+    if (key >= 0 && crumb_macos_keys[key].modifier_mask != 0) {
+        /* Aggregate flags stay set while either side is held. Device masks
+           distinguish a left release from a still-held right modifier. */
+        const NSUInteger mask = crumb_macos_keys[key].modifier_mask;
+        crumb_input_set_key(key, ([event modifierFlags] & mask) != 0);
+        return;
+    }
+    [super flagsChanged:event];
 }
 
 - (BOOL)isOpaque {

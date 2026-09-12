@@ -1812,7 +1812,7 @@ draw {}
         checked(
             r#"game "Input"
 const FIRST: i32 = KEY_W
-let combined: i32 = KEY_A + KEY_S + KEY_D + KEY_UP + KEY_DOWN + KEY_LEFT + KEY_RIGHT + KEY_SPACE + KEY_ENTER + KEY_ESCAPE
+let combined: i32 = KEY_A + KEY_S + KEY_D + KEY_UP + KEY_DOWN + KEY_LEFT + KEY_RIGHT + KEY_SPACE + KEY_ENTER + KEY_ESCAPE + KEY_F
 start { quit() }
 update(dt: f32) {
     if key_down(KEY_W) || key_pressed(KEY_SPACE) || key_released(KEY_ENTER) {}

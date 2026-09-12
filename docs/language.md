@@ -540,12 +540,37 @@ The presenter-independent input built-ins are:
 - `key_released(key: i32) -> bool`
 - `quit() -> void`
 
-Speck predefines these immutable `i32` constants:
+Speck predefines immutable `i32` constants for ordinary physical keyboard keys:
 
-```text
-KEY_W       KEY_A       KEY_S       KEY_D
-KEY_UP      KEY_DOWN    KEY_LEFT    KEY_RIGHT
-KEY_SPACE   KEY_ENTER   KEY_ESCAPE
+| Family | Constants |
+| --- | --- |
+| Letters | `KEY_A` through `KEY_Z` |
+| Number row | `KEY_0` through `KEY_9` |
+| Punctuation | `KEY_MINUS`, `KEY_EQUAL`, `KEY_BRACKET_LEFT`, `KEY_BRACKET_RIGHT`, `KEY_BACKSLASH`, `KEY_SEMICOLON`, `KEY_QUOTE`, `KEY_BACKQUOTE`, `KEY_COMMA`, `KEY_PERIOD`, `KEY_SLASH` |
+| Navigation | `KEY_UP`, `KEY_DOWN`, `KEY_LEFT`, `KEY_RIGHT`, `KEY_TAB`, `KEY_BACKSPACE`, `KEY_DELETE`, `KEY_INSERT`, `KEY_HOME`, `KEY_END`, `KEY_PAGE_UP`, `KEY_PAGE_DOWN` |
+| Common controls | `KEY_SPACE`, `KEY_ENTER`, `KEY_ESCAPE` |
+| Function row | `KEY_F1` through `KEY_F24` |
+| Keypad | `KEY_NUMPAD_0` through `KEY_NUMPAD_9`, `KEY_NUMPAD_ADD`, `KEY_NUMPAD_SUBTRACT`, `KEY_NUMPAD_MULTIPLY`, `KEY_NUMPAD_DIVIDE`, `KEY_NUMPAD_DECIMAL`, `KEY_NUMPAD_EQUAL`, `KEY_NUMPAD_ENTER` |
+| Sided modifiers | `KEY_SHIFT_LEFT`, `KEY_SHIFT_RIGHT`, `KEY_CONTROL_LEFT`, `KEY_CONTROL_RIGHT`, `KEY_ALT_LEFT`, `KEY_ALT_RIGHT`, `KEY_META_LEFT`, `KEY_META_RIGHT` |
+
+Names denote physical positions (browser `KeyboardEvent.code`), rather than text
+characters. Shift does not turn `KEY_1` into a separate exclamation-mark key.
+Meta is Command on macOS and the corresponding Meta/Windows key in browsers.
+The native macOS mapping has no Insert or F21–F24 virtual code; those remain
+available through browser input. Lock keys and Fn are not ordinary held-key
+inputs and are outside this API. OS or browser shortcuts may intercept keys.
+
+Keypad Enter has its own `KEY_NUMPAD_ENTER` identity. Earlier native builds
+aliased it to `KEY_ENTER`; games that want either should query both. Other
+existing key IDs retain their values. The complete mapping lives in
+[`runtime/crumb/keys.def`](../runtime/crumb/keys.def).
+
+Bindings belong to the game, for example:
+
+```speck
+let flip_key: i32 = KEY_F
+// In update:
+if key_pressed(flip_key) { tone(740.0, 0.06, 0.2) }
 ```
 
 They may be used wherever an `i32` value is valid, including compile-time

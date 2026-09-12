@@ -1343,6 +1343,7 @@ let held: bool = false
 start {}
 update(dt: f32) {
     held = key_down(KEY_LEFT)
+    if key_pressed(KEY_F) || key_released(KEY_F) { held = key_down(KEY_F) }
     if key_pressed(KEY_SPACE) || key_released(KEY_ENTER) { quit() }
 }
 draw {}
@@ -1353,6 +1354,9 @@ draw {}
         assert!(ir.contains("declare i1 @crumb_key_released(i32)"));
         assert!(ir.contains("declare void @crumb_request_quit()"));
         assert!(ir.contains("call i1 @crumb_key_down(i32 6)"));
+        assert!(ir.contains("call i1 @crumb_key_down(i32 11)"));
+        assert!(ir.contains("call i1 @crumb_key_pressed(i32 11)"));
+        assert!(ir.contains("call i1 @crumb_key_released(i32 11)"));
         assert!(ir.contains("call i1 @crumb_key_pressed(i32 8)"));
         assert!(ir.contains("call i1 @crumb_key_released(i32 9)"));
         assert!(ir.contains("call void @crumb_request_quit()"));

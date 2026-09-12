@@ -165,8 +165,8 @@ Each body has exactly three ASCII fields:
 ```
 
 Client IDs contain 1–64 ASCII letters, digits, hyphens, or underscores. The
-accepted browser codes are `KeyW`, `KeyA`, `KeyS`, `KeyD`, `ArrowUp`,
-`ArrowDown`, `ArrowLeft`, `ArrowRight`, `Space`, `Enter`, and `Escape`.
+accepted browser codes come from `runtime/crumb/keys.def`, the same catalog
+used by compiler constants and native input.
 Unsupported codes are ignored. Invalid UTF-8, field counts, kinds, client IDs,
 truncated messages, and oversized bodies receive a safe error response.
 The page serializes ordinary control requests so separate HTTP connections
@@ -187,7 +187,7 @@ record sent over the reverse direction of the existing loopback TCP socket:
 | 0 | 4 | Magic | ASCII `SPKI` |
 | 4 | 1 | Version | `1` |
 | 5 | 1 | Kind | `1` key transition, `2` release-all |
-| 6 | 1 | Key | CRuMB identifier `0` through `10`; zero for release-all |
+| 6 | 1 | Key | Stable CRuMB identifier from `runtime/crumb/keys.def`; zero for release-all |
 | 7 | 1 | State | `0` up, `1` down; zero for release-all |
 
 The C stream presenter accumulates partial records, validates every field, and
@@ -207,7 +207,10 @@ is required by automated tests.
 
 The HTTP server and protocol implementation use only Rust's standard library.
 The compiler adds `ctrlc` for portable Ctrl-C handling; its transitive platform
-support is development tooling. The viewer HTML is embedded in the compiler.
+support is development tooling. The viewer HTML and its keyboard allowlist are derived at build time from
+`runtime/crumb/keys.def` and embedded in the compiler. The same catalog defines
+compiler constants, wire IDs, and native mappings; game bindings do not require
+changes to these consumers.
 None of those bytes are compiled or linked into a normal game. The `_dev`
 stream presenter is likewise omitted from `speck build`, while the normal PPM
 presenter is omitted from the `_dev` game.

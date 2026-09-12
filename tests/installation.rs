@@ -12,7 +12,7 @@ fn installed_compiler_builds_without_its_source_tree() {
     let work = directory.path();
     let source = work.join("source");
     fs::create_dir_all(&source).unwrap();
-    for name in ["Cargo.toml", "Cargo.lock"] {
+    for name in ["Cargo.toml", "Cargo.lock", "build.rs"] {
         fs::copy(root.join(name), source.join(name)).unwrap();
     }
     for name in ["src", "runtime"] {
@@ -31,6 +31,8 @@ fn installed_compiler_builds_without_its_source_tree() {
     run(
         Command::new(env!("CARGO"))
             .current_dir(&source)
+            // Never let this independent package reuse the parent build's generated files.
+            .env_remove("OUT_DIR")
             .args([
                 "build",
                 "--locked",
