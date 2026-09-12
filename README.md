@@ -135,7 +135,7 @@ limit used by automation. It does not change Speck language semantics.
 
 Speck exposes `key_down(key: i32) -> bool`, `key_pressed(key: i32) -> bool`,
 `key_released(key: i32) -> bool`, and `quit() -> void`. Predefined immutable
-constants cover W/A/S/D, arrows, Space, Enter, and Escape. Speck sees only these
+constants cover W/A/S/D/F, arrows, Space, Enter, and Escape. Speck sees only these
 stable names and identifiers: AppKit key codes, browser `KeyboardEvent.code`,
 HTTP, TCP, and presenter events remain below the Speck/CRuMB boundary.
 
@@ -156,7 +156,7 @@ arrays use native value storage and checked `i32` indexing. Named structs are
 fixed-layout values with no object runtime; the two aggregate forms compose
 recursively for allocation-free level data. A narrow `for i in lower..upper`
 statement provides exclusive, unit-step `i32` iteration without range objects
-or iterator protocols. Input is limited to eleven fixed
+or iterator protocols. Input is limited to twelve fixed
 digital keys;
 there is no mouse, controller, text entry, rebinding, or arbitrary key
 enumeration. Graphics are currently limited to clearing the software

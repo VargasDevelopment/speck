@@ -543,7 +543,7 @@ The presenter-independent input built-ins are:
 Speck predefines these immutable `i32` constants:
 
 ```text
-KEY_W       KEY_A       KEY_S       KEY_D
+KEY_W       KEY_A       KEY_S       KEY_D       KEY_F
 KEY_UP      KEY_DOWN    KEY_LEFT    KEY_RIGHT
 KEY_SPACE   KEY_ENTER   KEY_ESCAPE
 ```

@@ -228,6 +228,17 @@ fn browser_input_reaches_game_with_single_controller_ownership() {
         }
     );
 
+    for (body, down) in [
+        (b"viewer-1 down KeyF".as_slice(), true),
+        (b"viewer-1 up KeyF".as_slice(), false),
+    ] {
+        assert!(post(address, "/input?generation=1", body).starts_with(b"HTTP/1.1 204"));
+        assert_eq!(
+            read_control(&mut game),
+            ControlMessage::Key { key: Key::F, down }
+        );
+    }
+
     let busy = post(address, "/input?generation=1", b"viewer-2 down KeyD");
     assert!(busy.starts_with(b"HTTP/1.1 409 Conflict"));
 

@@ -247,7 +247,7 @@
       "name": "support.function.speck"
     },
     "constants": {
-      "match": "(?<![A-Za-z0-9_])(?:KEY_W|KEY_A|KEY_S|KEY_D|KEY_UP|KEY_DOWN|KEY_LEFT|KEY_RIGHT|KEY_SPACE|KEY_ENTER|KEY_ESCAPE|FRAMEBUFFER_WIDTH|FRAMEBUFFER_HEIGHT)(?![A-Za-z0-9_])",
+      "match": "(?<![A-Za-z0-9_])(?:KEY_W|KEY_A|KEY_S|KEY_D|KEY_F|KEY_UP|KEY_DOWN|KEY_LEFT|KEY_RIGHT|KEY_SPACE|KEY_ENTER|KEY_ESCAPE|FRAMEBUFFER_WIDTH|FRAMEBUFFER_HEIGHT)(?![A-Za-z0-9_])",
       "name": "support.constant.speck"
     },
     "numbers": {

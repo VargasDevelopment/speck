@@ -19,7 +19,8 @@ enum crumb_key {
     CRUMB_KEY_SPACE = 8,
     CRUMB_KEY_ENTER = 9,
     CRUMB_KEY_ESCAPE = 10,
-    CRUMB_KEY_COUNT = 11
+    CRUMB_KEY_F = 11,
+    CRUMB_KEY_COUNT = 12
 };
 
 void crumb_audio_init(void);

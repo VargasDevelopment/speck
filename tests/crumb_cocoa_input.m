@@ -60,13 +60,30 @@ int main(void) {
         assert(!crumb_key_down(CRUMB_KEY_A));
         assert(crumb_key_released(CRUMB_KEY_A));
 
+        // Physical macOS F is code 3; keep this independent of the mapping enum.
         crumb_input_begin_frame();
+        [view keyDown:key_event(3, NO)];
+        assert(crumb_key_down(CRUMB_KEY_F));
+        assert(crumb_key_pressed(CRUMB_KEY_F));
+        assert(!crumb_key_down(CRUMB_KEY_D));
+        crumb_input_begin_frame();
+        [view keyDown:key_event(3, YES)];
+        assert(crumb_key_down(CRUMB_KEY_F));
+        assert(!crumb_key_pressed(CRUMB_KEY_F));
+        [view keyUp:key_event(3, NO)];
+        assert(!crumb_key_down(CRUMB_KEY_F));
+        assert(crumb_key_released(CRUMB_KEY_F));
+
+        crumb_input_begin_frame();
+        [view keyDown:key_event(3, NO)];
         [view keyDown:key_event(CRUMB_MAC_KEY_ESCAPE, NO)];
         assert(crumb_key_down(CRUMB_KEY_ESCAPE));
         assert(crumb_key_pressed(CRUMB_KEY_ESCAPE));
 
         [view keyDown:key_event(CRUMB_MAC_KEY_LEFT, NO)];
         [delegate windowDidResignKey:[NSNotification notificationWithName:@"Test" object:nil]];
+        assert(!crumb_key_down(CRUMB_KEY_F));
+        assert(crumb_key_released(CRUMB_KEY_F));
         assert(!crumb_key_down(CRUMB_KEY_ESCAPE));
         assert(!crumb_key_down(CRUMB_KEY_LEFT));
         assert(crumb_key_released(CRUMB_KEY_ESCAPE));

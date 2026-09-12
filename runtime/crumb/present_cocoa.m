@@ -15,6 +15,7 @@ enum crumb_macos_key_code {
     CRUMB_MAC_KEY_A = 0,
     CRUMB_MAC_KEY_S = 1,
     CRUMB_MAC_KEY_D = 2,
+    CRUMB_MAC_KEY_F = 3,
     CRUMB_MAC_KEY_W = 13,
     CRUMB_MAC_KEY_ENTER = 36,
     CRUMB_MAC_KEY_SPACE = 49,
@@ -36,6 +37,8 @@ static int crumb_key_for_macos_code(unsigned short key_code) {
         return CRUMB_KEY_S;
     case CRUMB_MAC_KEY_D:
         return CRUMB_KEY_D;
+    case CRUMB_MAC_KEY_F:
+        return CRUMB_KEY_F;
     case CRUMB_MAC_KEY_UP:
         return CRUMB_KEY_UP;
     case CRUMB_MAC_KEY_DOWN:

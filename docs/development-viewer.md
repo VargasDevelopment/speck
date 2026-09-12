@@ -165,7 +165,7 @@ Each body has exactly three ASCII fields:
 ```
 
 Client IDs contain 1–64 ASCII letters, digits, hyphens, or underscores. The
-accepted browser codes are `KeyW`, `KeyA`, `KeyS`, `KeyD`, `ArrowUp`,
+accepted browser codes are `KeyW`, `KeyA`, `KeyS`, `KeyD`, `KeyF`, `ArrowUp`,
 `ArrowDown`, `ArrowLeft`, `ArrowRight`, `Space`, `Enter`, and `Escape`.
 Unsupported codes are ignored. Invalid UTF-8, field counts, kinds, client IDs,
 truncated messages, and oversized bodies receive a safe error response.

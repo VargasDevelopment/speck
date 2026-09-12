@@ -33,6 +33,7 @@ pub enum Key {
     Space = 8,
     Enter = 9,
     Escape = 10,
+    F = 11,
 }
 
 impl Key {
@@ -49,6 +50,7 @@ impl Key {
             8 => Self::Space,
             9 => Self::Enter,
             10 => Self::Escape,
+            11 => Self::F,
             _ => return None,
         })
     }
@@ -59,6 +61,7 @@ impl Key {
             "KeyA" => Self::A,
             "KeyS" => Self::S,
             "KeyD" => Self::D,
+            "KeyF" => Self::F,
             "ArrowUp" => Self::Up,
             "ArrowDown" => Self::Down,
             "ArrowLeft" => Self::Left,
@@ -479,6 +482,41 @@ mod tests {
                 message
             );
         }
+    }
+
+    #[test]
+    fn browser_keys_keep_their_wire_ids_and_round_trip_both_transitions() {
+        for (code, key, id) in [
+            ("KeyW", Key::W, 0),
+            ("KeyA", Key::A, 1),
+            ("KeyS", Key::S, 2),
+            ("KeyD", Key::D, 3),
+            ("ArrowUp", Key::Up, 4),
+            ("ArrowDown", Key::Down, 5),
+            ("ArrowLeft", Key::Left, 6),
+            ("ArrowRight", Key::Right, 7),
+            ("Space", Key::Space, 8),
+            ("Enter", Key::Enter, 9),
+            ("Escape", Key::Escape, 10),
+            ("KeyF", Key::F, 11),
+        ] {
+            for (kind, down) in [("down", true), ("up", false)] {
+                let body = format!("viewer-1 {kind} {code}");
+                assert_eq!(
+                    parse_browser_input(body.as_bytes()).unwrap(),
+                    BrowserInput::Key {
+                        client: "viewer-1".into(),
+                        key,
+                        down
+                    }
+                );
+                let message = ControlMessage::Key { key, down };
+                let encoded = encode_control(message);
+                assert_eq!(encoded, [b'S', b'P', b'K', b'I', 1, 1, id, u8::from(down)]);
+                assert_eq!(decode_control(&encoded).unwrap(), message);
+            }
+        }
+        assert!(decode_control(&[b'S', b'P', b'K', b'I', 1, 1, 12, 1]).is_err());
     }
 
     #[test]

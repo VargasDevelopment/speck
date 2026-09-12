@@ -60,3 +60,53 @@ fn headless_keyboard_example_is_input_free_and_deterministic() {
     assert_eq!(pixel(150, 80), [240, 150, 40]);
     assert_eq!(pixel(149, 80), [32, 18, 32]);
 }
+
+#[test]
+fn browser_f_transitions_reach_the_c_stream_runtime() {
+    use speck::dev::protocol::{BrowserInput, ControlMessage, encode_control, parse_browser_input};
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let directory = support::workspace();
+    let executable = directory.path().join("crumb_stream_input_test");
+    let compile = support::run(
+        support::environment()
+            .clang_command()
+            .current_dir(root)
+            .args([
+                "-std=c11",
+                "-Wall",
+                "-Wextra",
+                "-Wpedantic",
+                "-Werror",
+                "-Iruntime/crumb",
+                "tests/crumb_stream_input.c",
+                "runtime/crumb/input.c",
+                "runtime/crumb/framebuffer.c",
+                "-o",
+            ])
+            .arg(&executable),
+    );
+    assert_success("stream input test compilation", &compile);
+
+    let mut records = Vec::new();
+    for body in [
+        "viewer down KeyF",
+        "viewer down KeyF",
+        "viewer up KeyF",
+        "viewer down KeyF",
+        "viewer down Escape",
+    ] {
+        let BrowserInput::Key { key, down, .. } = parse_browser_input(body.as_bytes()).unwrap()
+        else {
+            panic!("supported key should parse");
+        };
+        records.extend(encode_control(ControlMessage::Key { key, down }));
+    }
+    records.extend(encode_control(ControlMessage::ReleaseAll));
+    // The first unassigned ID must remain harmless at the native protocol boundary.
+    records.extend([b'S', b'P', b'K', b'I', 1, 1, 12, 1]);
+    let input = directory.path().join("input.bin");
+    fs::write(&input, records).unwrap();
+    let run = support::run(Command::new(&executable).arg(input));
+    assert_success("stream input test", &run);
+}

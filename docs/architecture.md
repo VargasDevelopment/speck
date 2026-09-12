@@ -190,7 +190,7 @@ CRuMB's graphics path is split by responsibility:
 
 - `framebuffer.c` owns a packed, row-major RGB framebuffer with per-game dimensions (320x180 by default) and implements
   clear and clipped filled-rectangle rasterization.
-- `input.c` owns fixed current, pressed, and released bytes for CRuMB's eleven
+- `input.c` owns fixed current, pressed, and released bytes for CRuMB's twelve
   portable key identifiers plus the runtime quit flag. It allocates nothing,
   bounds-checks every public query, and can be manipulated directly by tests.
 - `present_ppm.c` is selected for normal builds. After every `spk_draw`, it
@@ -254,7 +254,7 @@ backing-pixel rectangle. When at least one native-size framebuffer fits, the
 scale is the largest fitting integer; smaller windows use a fractional
 nearest-neighbor downscale. Unused space is black letterbox area. AppKit events
 are drained by the pre-update poll hook on the main thread. `keyDown:` and
-`keyUp:` translate only W/A/S/D, arrows, Space, Enter, and Escape from
+`keyUp:` translate only W/A/S/D/F, arrows, Space, Enter, and Escape from
 presenter-local macOS codes; AppKit repeat events are ignored.
 `windowDidResignKey:` releases all held keys. Escape is delivered normally and
 is not a presenter-level exit shortcut. `windowWillClose` releases keys and
@@ -334,7 +334,7 @@ tool. They do not appear in a generated normal game executable.
 - Output is dynamically linked against host system libraries and, for Cocoa,
   Apple system frameworks.
 - CRuMB uses `printf` solely for development verification.
-- Keyboard input is limited to eleven fixed digital keys. There is no text,
+- Keyboard input is limited to twelve fixed digital keys. There is no text,
   mouse, controller, rebinding, or arbitrary-key API.
 - The Cocoa presenter has no assets, allocation API, display-link
   synchronization, full-screen mode, or game-specific behavior. It redraws at

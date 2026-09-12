@@ -157,3 +157,9 @@ test('representative BOOTS source retains useful scopes through nested aggregate
     has(tokenize(source)[lastCall], 'draw_platform', 'entity.name.function.speck');
     has(tokenize(source)[lastCall], 'level_platforms', 'variable.other.speck');
 });
+
+test('F input constant has a builtin scope without matching identifier prefixes', () => {
+    const tokens = tokenize('if key_pressed(KEY_F) || key_released(KEY_F) { let KEY_FLIP: bool = key_down(KEY_F) }').flat();
+    has(tokens, 'KEY_F', 'support.constant.speck');
+    has(tokens, 'KEY_FLIP', 'variable.other.speck');
+});

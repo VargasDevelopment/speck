@@ -127,6 +127,10 @@ const KEY_CONSTANTS: &[PredefinedConstant] = &[
         name: "KEY_ESCAPE",
         value: ConstantValue::I32(10),
     },
+    PredefinedConstant {
+        name: "KEY_F",
+        value: ConstantValue::I32(11),
+    },
 ];
 
 /// All predefined values for one game's logical framebuffer.
