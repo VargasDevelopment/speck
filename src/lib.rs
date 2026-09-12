@@ -5,6 +5,7 @@ pub mod cli;
 pub mod codegen;
 pub mod dev;
 pub mod diagnostic;
+pub mod keyboard;
 pub mod lexer;
 mod modules;
 pub mod parser;

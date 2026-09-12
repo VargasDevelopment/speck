@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use super::protocol::{self, BrowserInput, ControlMessage, Frame};
 
-const VIEWER_HTML: &[u8] = include_bytes!("viewer.html");
+const VIEWER_HTML: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/viewer.html"));
 const INPUT_LEASE_TIMEOUT: Duration = Duration::from_secs(1);
 const HTTP_HEADER_MAX_BYTES: usize = 8192;
 

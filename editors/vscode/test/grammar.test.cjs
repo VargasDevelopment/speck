@@ -64,7 +64,7 @@ test('all compiler keywords and built-in names stay covered', () => {
     }
     const builtins = fs.readFileSync(path.join(root, '../../src/builtins.rs'), 'utf8');
     const names = [...builtins.matchAll(/name: "([A-Za-z0-9_]+)"/g)].map(match => match[1]);
-    assert.ok(names.length >= 19);
+    assert.ok(names.includes('key_pressed') && names.includes('FRAMEBUFFER_WIDTH'));
     for (const name of names) {
         has(line(/^[A-Z_]+$/.test(name) ? name : `${name}()`), name,
             /^[A-Z_]+$/.test(name) ? 'support.constant.speck' : 'support.function.speck');
@@ -158,8 +158,14 @@ test('representative BOOTS source retains useful scopes through nested aggregate
     has(tokenize(source)[lastCall], 'level_platforms', 'variable.other.speck');
 });
 
-test('F input constant has a builtin scope without matching identifier prefixes', () => {
-    const tokens = tokenize('if key_pressed(KEY_F) || key_released(KEY_F) { let KEY_FLIP: bool = key_down(KEY_F) }').flat();
-    has(tokens, 'KEY_F', 'support.constant.speck');
-    has(tokens, 'KEY_FLIP', 'variable.other.speck');
+test('keyboard catalog names and constant naming boundaries have useful scopes', () => {
+    const catalog = fs.readFileSync(path.join(root, '../../runtime/crumb/keys.def'), 'utf8');
+    const names = [...catalog.matchAll(/^SPECK_KEY\(\s*([^,]+),/gm)].map(match => `KEY_${match[1].trim()}`);
+    assert.ok(names.includes('KEY_F') && names.includes('KEY_Z') && names.includes('KEY_0'));
+    for (const name of names) has(line(name), name, 'support.constant.speck');
+    // Syntax styling follows the naming convention; semantic lookup rejects
+    // nonexistent keys. Longer ordinary identifiers remain ordinary variables.
+    has(line('KEY_CUSTOM'), 'KEY_CUSTOM', 'support.constant.speck');
+    has(line('KEY_F_suffix'), 'KEY_F_suffix', 'variable.other.speck');
+    has(line('prefix_KEY_F'), 'prefix_KEY_F', 'variable.other.speck');
 });

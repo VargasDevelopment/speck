@@ -364,7 +364,7 @@ fn malformed_oversized_and_unsupported_browser_input_is_safe() {
         .starts_with(b"HTTP/1.1 400 Bad Request")
     );
     assert!(
-        post(address, "/input?generation=1", b"viewer-1 down KeyQ")
+        post(address, "/input?generation=1", b"viewer-1 down CapsLock")
             .starts_with(b"HTTP/1.1 204 No Content")
     );
 
@@ -428,4 +428,26 @@ fn falls_back_safely_when_default_port_is_busy() {
     let error = bind_http(IpAddr::V4(Ipv4Addr::LOCALHOST), occupied, false)
         .expect_err("explicit conflict should fail");
     assert!(error.contains("could not bind development viewer"));
+}
+
+#[test]
+fn viewer_key_allowlist_matches_the_compiler_catalog() {
+    let html = std::str::from_utf8(VIEWER_HTML).unwrap();
+    let list = html
+        .split("const gameCodes = new Set([")
+        .nth(1)
+        .unwrap()
+        .split("]);")
+        .next()
+        .unwrap();
+    let browser_codes: Vec<_> = list
+        .split(',')
+        .map(|code| code.trim().trim_matches('"'))
+        .collect();
+    let expected: Vec<_> = crate::keyboard::KEYS
+        .iter()
+        .map(|key| key.browser_code)
+        .collect();
+    assert_eq!(browser_codes, expected);
+    assert!(!html.contains("/* SPECK_BROWSER_CODES */"));
 }

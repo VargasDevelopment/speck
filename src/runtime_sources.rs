@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const FILES: &[(&str, &[u8])] = &[
     ("crumb.c", include_bytes!("../runtime/crumb/crumb.c")),
     ("crumb.h", include_bytes!("../runtime/crumb/crumb.h")),
+    ("keys.def", include_bytes!("../runtime/crumb/keys.def")),
     (
         "crumb_internal.h",
         include_bytes!("../runtime/crumb/crumb_internal.h"),

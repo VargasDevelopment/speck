@@ -62,7 +62,7 @@ fn headless_keyboard_example_is_input_free_and_deterministic() {
 }
 
 #[test]
-fn browser_f_transitions_reach_the_c_stream_runtime() {
+fn all_browser_key_transitions_reach_the_c_stream_runtime() {
     use speck::dev::protocol::{BrowserInput, ControlMessage, encode_control, parse_browser_input};
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -89,24 +89,86 @@ fn browser_f_transitions_reach_the_c_stream_runtime() {
     assert_success("stream input test compilation", &compile);
 
     let mut records = Vec::new();
-    for body in [
-        "viewer down KeyF",
-        "viewer down KeyF",
-        "viewer up KeyF",
-        "viewer down KeyF",
-        "viewer down Escape",
-    ] {
+    let mut send = |body: String| {
         let BrowserInput::Key { key, down, .. } = parse_browser_input(body.as_bytes()).unwrap()
         else {
             panic!("supported key should parse");
         };
         records.extend(encode_control(ControlMessage::Key { key, down }));
+    };
+    for key in speck::keyboard::KEYS {
+        for transition in ["down", "down", "up"] {
+            send(format!("viewer {transition} {}", key.browser_code));
+        }
+    }
+    for key in speck::keyboard::KEYS {
+        send(format!("viewer down {}", key.browser_code));
     }
     records.extend(encode_control(ControlMessage::ReleaseAll));
-    // The first unassigned ID must remain harmless at the native protocol boundary.
-    records.extend([b'S', b'P', b'K', b'I', 1, 1, 12, 1]);
+    // Invalid wire IDs must stay harmless at the C runtime boundary.
+    records.extend([b'S', b'P', b'K', b'I', 1, 1, 255, 1]);
     let input = directory.path().join("input.bin");
     fs::write(&input, records).unwrap();
     let run = support::run(Command::new(&executable).arg(input));
     assert_success("stream input test", &run);
+}
+
+#[test]
+fn keyboard_catalog_is_available_to_games_with_stable_legacy_ids() {
+    use speck::keyboard::{KEYS, Key};
+    for (name, id) in [
+        ("KEY_W", 0),
+        ("KEY_A", 1),
+        ("KEY_S", 2),
+        ("KEY_D", 3),
+        ("KEY_UP", 4),
+        ("KEY_DOWN", 5),
+        ("KEY_LEFT", 6),
+        ("KEY_RIGHT", 7),
+        ("KEY_SPACE", 8),
+        ("KEY_ENTER", 9),
+        ("KEY_ESCAPE", 10),
+        ("KEY_F", 11),
+    ] {
+        assert_eq!(
+            KEYS.iter().find(|key| key.name == name).unwrap().key as u8,
+            id
+        );
+    }
+    for letter in 'A'..='Z' {
+        assert!(KEYS.iter().any(|key| key.name == format!("KEY_{letter}")));
+    }
+    for digit in 0..=9 {
+        for name in [format!("KEY_{digit}"), format!("KEY_NUMPAD_{digit}")] {
+            assert!(KEYS.iter().any(|key| key.name == name));
+        }
+    }
+    for function in 1..=24 {
+        assert!(
+            KEYS.iter()
+                .any(|key| key.name == format!("KEY_F{function}"))
+        );
+    }
+    // Compile every predefined name and inspect the actual emitted ABI value.
+    // This connects catalog coverage to semantic lookup and LLVM lowering.
+    for key in KEYS {
+        let source = format!(
+            "game \"Keyboard\" start {{ print_i32({}) }} update(dt: f32) {{}} draw {{}}",
+            key.name
+        );
+        let ir = speck::compile_to_llvm(&source).unwrap();
+        assert!(ir.contains(&format!(
+            "call void @crumb_print_i32(i32 {})",
+            key.key as u8
+        )));
+        assert_eq!(Key::from_browser_code(key.browser_code), Some(key.key));
+        assert_eq!(Key::from_id(key.key as u8), Some(key.key));
+    }
+    assert!(Key::from_id(255).is_none());
+    assert!(
+        speck::analyze(
+            "game \"Invalid\" start { print_i32(KEY_NOT_REAL) } update(dt: f32) {} draw {}"
+        )
+        .is_err()
+    );
 }

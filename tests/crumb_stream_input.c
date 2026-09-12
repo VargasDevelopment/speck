@@ -20,30 +20,31 @@ int main(int argc, char **argv) {
     stream_socket = sockets[1];
     crumb_input_reset();
 
-    // Rust's browser mapping and encoder must agree with the real C decoder.
-    poll_record(records, sockets[0]);
-    assert(crumb_key_down(CRUMB_KEY_F));
-    assert(crumb_key_pressed(CRUMB_KEY_F));
-    assert(!crumb_key_down(CRUMB_KEY_ESCAPE));
+    // Every Rust browser mapping must reach its exact C input slot. Exercise
+    // transitions and repeat suppression, then simultaneous held-key release.
+    for (int key = 0; key < CRUMB_KEY_COUNT; ++key) {
+        poll_record(records, sockets[0]);
+        assert(crumb_key_down(key));
+        assert(crumb_key_pressed(key));
+        crumb_input_begin_frame();
+        poll_record(records, sockets[0]);
+        assert(crumb_key_down(key));
+        assert(!crumb_key_pressed(key));
+        poll_record(records, sockets[0]);
+        assert(!crumb_key_down(key));
+        assert(crumb_key_released(key));
+        crumb_input_begin_frame();
+    }
+    for (int key = 0; key < CRUMB_KEY_COUNT; ++key) {
+        poll_record(records, sockets[0]);
+        assert(crumb_key_down(key));
+    }
     crumb_input_begin_frame();
     poll_record(records, sockets[0]);
-    assert(crumb_key_down(CRUMB_KEY_F));
-    assert(!crumb_key_pressed(CRUMB_KEY_F));
-    poll_record(records, sockets[0]);
-    assert(!crumb_key_down(CRUMB_KEY_F));
-    assert(crumb_key_released(CRUMB_KEY_F));
-
-    crumb_input_begin_frame();
-    poll_record(records, sockets[0]);
-    poll_record(records, sockets[0]);
-    assert(crumb_key_down(CRUMB_KEY_F));
-    assert(crumb_key_down(CRUMB_KEY_ESCAPE));
-    poll_record(records, sockets[0]);
-    assert(!crumb_key_down(CRUMB_KEY_F));
-    assert(!crumb_key_down(CRUMB_KEY_ESCAPE));
-    assert(crumb_key_released(CRUMB_KEY_F));
-    assert(crumb_key_released(CRUMB_KEY_ESCAPE));
-
+    for (int key = 0; key < CRUMB_KEY_COUNT; ++key) {
+        assert(!crumb_key_down(key));
+        assert(crumb_key_released(key));
+    }
     crumb_input_begin_frame();
     poll_record(records, sockets[0]);
     for (int key = 0; key < CRUMB_KEY_COUNT; ++key) {

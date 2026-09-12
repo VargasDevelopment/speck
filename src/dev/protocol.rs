@@ -1,3 +1,4 @@
+pub use crate::keyboard::Key;
 use crate::resolution::Resolution;
 use std::fmt;
 use std::io::{self, Read};
@@ -18,61 +19,6 @@ const CONTROL_MAGIC: &[u8; 4] = b"SPKI";
 const CONTROL_VERSION: u8 = 1;
 const CONTROL_KEY: u8 = 1;
 const CONTROL_RELEASE_ALL: u8 = 2;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum Key {
-    W = 0,
-    A = 1,
-    S = 2,
-    D = 3,
-    Up = 4,
-    Down = 5,
-    Left = 6,
-    Right = 7,
-    Space = 8,
-    Enter = 9,
-    Escape = 10,
-    F = 11,
-}
-
-impl Key {
-    fn from_id(id: u8) -> Option<Self> {
-        Some(match id {
-            0 => Self::W,
-            1 => Self::A,
-            2 => Self::S,
-            3 => Self::D,
-            4 => Self::Up,
-            5 => Self::Down,
-            6 => Self::Left,
-            7 => Self::Right,
-            8 => Self::Space,
-            9 => Self::Enter,
-            10 => Self::Escape,
-            11 => Self::F,
-            _ => return None,
-        })
-    }
-
-    fn from_browser_code(code: &str) -> Option<Self> {
-        Some(match code {
-            "KeyW" => Self::W,
-            "KeyA" => Self::A,
-            "KeyS" => Self::S,
-            "KeyD" => Self::D,
-            "KeyF" => Self::F,
-            "ArrowUp" => Self::Up,
-            "ArrowDown" => Self::Down,
-            "ArrowLeft" => Self::Left,
-            "ArrowRight" => Self::Right,
-            "Space" => Self::Space,
-            "Enter" => Self::Enter,
-            "Escape" => Self::Escape,
-            _ => return None,
-        })
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ControlMessage {
@@ -516,7 +462,7 @@ mod tests {
                 assert_eq!(decode_control(&encoded).unwrap(), message);
             }
         }
-        assert!(decode_control(&[b'S', b'P', b'K', b'I', 1, 1, 12, 1]).is_err());
+        assert!(decode_control(&[b'S', b'P', b'K', b'I', 1, 1, 255, 1]).is_err());
     }
 
     #[test]
@@ -558,7 +504,7 @@ mod tests {
             }
         );
         assert!(matches!(
-            parse_browser_input(b"viewer-1 down KeyQ").expect("unsupported key should be safe"),
+            parse_browser_input(b"viewer-1 down CapsLock").expect("unsupported key should be safe"),
             BrowserInput::UnsupportedKey { .. }
         ));
     }

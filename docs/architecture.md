@@ -186,12 +186,21 @@ division failure hooks. They report the invalid operands to standard error and
 terminate; they do not introduce an exception, allocator, generalized panic
 object, or runtime metadata.
 
+`runtime/crumb/keys.def` is the canonical keyboard catalog, including stable IDs,
+public names, browser codes, native codes, and sided modifier masks. C consumes
+it directly for enums and native mapping; a dependency-free Cargo build script
+validates the catalog and derives Rust metadata and the viewer's allowlist.
+Compiler constants iterate that metadata. The catalog is embedded with the
+runtime sources, so installed compilers do not depend on a checkout. Editor
+highlighting recognizes the `KEY_*` naming convention instead of maintaining
+another key inventory. Old IDs remain stable; new keys append to the catalog.
+
 CRuMB's graphics path is split by responsibility:
 
 - `framebuffer.c` owns a packed, row-major RGB framebuffer with per-game dimensions (320x180 by default) and implements
   clear and clipped filled-rectangle rasterization.
-- `input.c` owns fixed current, pressed, and released bytes for CRuMB's twelve
-  portable key identifiers plus the runtime quit flag. It allocates nothing,
+- `input.c` owns fixed current, pressed, and released bytes for the shared keyboard catalog's
+  key identifiers plus the runtime quit flag. It allocates nothing,
   bounds-checks every public query, and can be manipulated directly by tests.
 - `present_ppm.c` is selected for normal builds. After every `spk_draw`, it
   overwrites `build/frame.ppm` with a dependency-free binary P6 PPM image.
@@ -254,8 +263,9 @@ backing-pixel rectangle. When at least one native-size framebuffer fits, the
 scale is the largest fitting integer; smaller windows use a fractional
 nearest-neighbor downscale. Unused space is black letterbox area. AppKit events
 are drained by the pre-update poll hook on the main thread. `keyDown:` and
-`keyUp:` translate only W/A/S/D/F, arrows, Space, Enter, and Escape from
-presenter-local macOS codes; AppKit repeat events are ignored.
+`keyUp:` translate physical codes through the shared catalog; AppKit repeat
+events are ignored. `flagsChanged:` uses device-specific modifier masks to keep
+left and right Shift, Control, Alt, and Meta independent.
 `windowDidResignKey:` releases all held keys. Escape is delivered normally and
 is not a presenter-level exit shortcut. `windowWillClose` releases keys and
 converts the close button into the private clean-stop result instead of
@@ -334,8 +344,9 @@ tool. They do not appear in a generated normal game executable.
 - Output is dynamically linked against host system libraries and, for Cocoa,
   Apple system frameworks.
 - CRuMB uses `printf` solely for development verification.
-- Keyboard input is limited to twelve fixed digital keys. There is no text,
-  mouse, controller, rebinding, or arbitrary-key API.
+- Keyboard input is physical digital input from the shared catalog. There is
+  no text, mouse, controller, or lock-key/Fn API. Platform-reserved shortcuts
+  may be intercepted before reaching the game.
 - The Cocoa presenter has no assets, allocation API, display-link
   synchronization, full-screen mode, or game-specific behavior. It redraws at
   a deadline-paced nominal 60 Hz rather than synchronizing to the monitor's
