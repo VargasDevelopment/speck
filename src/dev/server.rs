@@ -524,6 +524,8 @@ fn handle_http(
         let state = snapshot.state.wire(snapshot.frame.is_some());
         if let Some(frame) = snapshot.frame {
             let sequence = frame.sequence.to_string();
+            let width = frame.resolution.width().to_string();
+            let height = frame.resolution.height().to_string();
             return respond(
                 &mut stream,
                 "200 OK",
@@ -533,8 +535,8 @@ fn handle_http(
                     ("X-Speck-State", state),
                     ("X-Speck-Generation", &generation),
                     ("X-Speck-Sequence", &sequence),
-                    ("X-Speck-Width", "320"),
-                    ("X-Speck-Height", "180"),
+                    ("X-Speck-Width", &width),
+                    ("X-Speck-Height", &height),
                     ("X-Speck-Format", "RGB8"),
                 ],
                 &frame.pixels,

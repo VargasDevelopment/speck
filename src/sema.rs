@@ -38,8 +38,7 @@ enum Mutability {
 pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
     let invalid_length_constants = resolve_program_types(program, &mut diagnostics);
-    let mut constants = builtins::CONSTANTS
-        .iter()
+    let mut constants = builtins::constants(program.resolution)
         .map(|constant| (constant.name.to_owned(), constant.value.ty()))
         .collect::<HashMap<_, _>>();
     let mut globals = HashMap::new();
@@ -48,8 +47,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         .map(|name| (name, "function"))
         .collect();
     top_level_names.extend(
-        builtins::CONSTANTS
-            .iter()
+        builtins::constants(program.resolution)
             .map(|constant| (constant.name.to_owned(), "predefined constant")),
     );
     let mut structs = HashMap::new();
@@ -88,10 +86,10 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
     let struct_types = StructTypeAnalysis::new(&structs, &mut diagnostics);
 
     for constant in &program.constants {
-        if builtins::predefined_constant(&constant.name).is_some() {
+        if builtins::is_predefined_constant(&constant.name) {
             diagnostics.push(Diagnostic::new(
                 format!(
-                    "constant `{}` conflicts with a predefined key constant",
+                    "constant `{}` conflicts with a predefined constant",
                     constant.name
                 ),
                 constant.span,
@@ -234,8 +232,7 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
         }
     }
 
-    let predefined_values = builtins::CONSTANTS
-        .iter()
+    let predefined_values = builtins::constants(program.resolution)
         .map(|constant| (constant.name.to_owned(), constant.value.clone()))
         .collect::<HashMap<_, _>>();
     for constant in &program.constants {
@@ -310,8 +307,13 @@ pub fn check(program: &mut Program) -> Result<(), Vec<Diagnostic>> {
             )
         })
         .collect();
-    let mut evaluator =
-        ConstantEvaluator::new(constant_defs, &globals, &structs, &invalid_constants);
+    let mut evaluator = ConstantEvaluator::new(
+        constant_defs,
+        &globals,
+        &structs,
+        &invalid_constants,
+        program.resolution,
+    );
     let constant_names = program
         .constants
         .iter()
@@ -562,10 +564,10 @@ fn check_function(
         diagnostics,
     );
     for param in &function.params {
-        if builtins::predefined_constant(&param.name).is_some() {
+        if builtins::is_predefined_constant(&param.name) {
             checker.error(
                 format!(
-                    "parameter `{}` conflicts with a predefined key constant",
+                    "parameter `{}` conflicts with a predefined constant",
                     param.name
                 ),
                 param.span,
@@ -655,9 +657,9 @@ impl<'a> FunctionChecker<'a> {
     fn check_statement(&mut self, statement: &Stmt) {
         match &statement.kind {
             StmtKind::Let { name, ty, init } => {
-                if builtins::predefined_constant(name).is_some() {
+                if builtins::is_predefined_constant(name) {
                     self.error(
-                        format!("variable `{name}` conflicts with a predefined key constant"),
+                        format!("variable `{name}` conflicts with a predefined constant"),
                         statement.span,
                     );
                 }
@@ -819,9 +821,9 @@ impl<'a> FunctionChecker<'a> {
                         );
                     }
                 }
-                if builtins::predefined_constant(name).is_some() {
+                if builtins::is_predefined_constant(name) {
                     self.error(
-                        format!("loop variable `{name}` conflicts with a predefined key constant"),
+                        format!("loop variable `{name}` conflicts with a predefined constant"),
                         *name_span,
                     );
                 }
@@ -1837,7 +1839,7 @@ draw {}
         assert!(errors.iter().any(|error| {
             error
                 .message
-                .contains("constant `KEY_W` conflicts with a predefined key constant")
+                .contains("constant `KEY_W` conflicts with a predefined constant")
         }));
         assert!(errors.iter().any(|error| {
             error

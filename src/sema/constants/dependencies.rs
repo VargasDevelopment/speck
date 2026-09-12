@@ -46,10 +46,9 @@ pub(in crate::sema) struct ConstantValues {
 }
 
 impl ConstantValues {
-    pub(in crate::sema) fn new() -> Self {
+    pub(in crate::sema) fn new(resolution: crate::resolution::Resolution) -> Self {
         Self {
-            values: builtins::CONSTANTS
-                .iter()
+            values: builtins::constants(resolution)
                 .map(|item| (item.name.to_owned(), item.value.clone()))
                 .collect(),
             failures: HashMap::new(),

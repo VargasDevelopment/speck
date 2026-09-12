@@ -103,8 +103,7 @@ fn emit_program(
             )
         })
         .collect();
-    let mut constants = builtins::CONSTANTS
-        .iter()
+    let mut constants = builtins::constants(program.resolution)
         .map(|constant| (constant.name.to_owned(), constant.value.clone()))
         .collect::<HashMap<_, _>>();
     constants.extend(program.constants.iter().map(|constant| {

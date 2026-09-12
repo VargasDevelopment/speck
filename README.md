@@ -11,7 +11,7 @@ code, and linked with CRuMB.
 **CRuMB — Compact Runtime for ultra-Minimal Binaries.**
 
 CRuMB is Speck's narrow C ABI platform layer. It owns startup, the frame loop,
-the frame delta, a fixed 320x180 RGB software framebuffer, portable digital-key
+the frame delta, a configurable RGB software framebuffer (320x180 by default), portable digital-key
 state, debug output, and shutdown. Its normal headless build runs five
 deterministic input-free frames and writes a PPM. A development-only presenter
 can instead stream complete frames and receive keyboard transitions through the
@@ -127,7 +127,7 @@ an SSH tunnel, frame limits, and the transport protocol.
 
 `speck run` is currently available only on macOS ARM64. It builds a separately
 named `_native` executable and launches a normal AppKit window over CRuMB's
-320x180 RGB framebuffer. The window uses nearest-neighbor drawing, prefers
+game’s RGB framebuffer. The window uses nearest-neighbor drawing, prefers
 integer backing-pixel scale factors, and centers or letterboxes the image while
 resizing. Interactive runs are unbounded; closing the window or pressing Ctrl-C
 requests an orderly shutdown. `--frames N` supplies the finite private runtime
@@ -139,13 +139,17 @@ constants cover W/A/S/D, arrows, Space, Enter, and Escape. Speck sees only these
 stable names and identifiers: AppKit key codes, browser `KeyboardEvent.code`,
 HTTP, TCP, and presenter events remain below the Speck/CRuMB boundary.
 
+`tone(frequency, seconds, volume)` and `noise(seconds, volume)` provide short
+procedural effects in native macOS runs. PPM and browser development stay
+silent. Try `speck run examples/audio_feedback.spk` and press W, A, or D.
+
 A lightweight [VS Code / Cursor extension](editors/vscode/README.md) adds
 syntax highlighting and basic editing for `.spk` files.
 
 ## Current limits
 
 This is an honest small compiler/runtime slice, not a general-purpose language
-or a finished tiny-game platform. There is no heap, garbage collector, audio,
+or a finished tiny-game platform. There is no heap, garbage collector,
 dynamic arrays, slices, or asset system. Relative file imports provide modules
 with qualified names; there is no package manager. Fixed-size explicitly typed
 arrays use native value storage and checked `i32` indexing. Named structs are

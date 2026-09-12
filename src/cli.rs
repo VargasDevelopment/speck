@@ -86,7 +86,12 @@ fn native(args: &[OsString]) -> ExitCode {
     };
     let llvm_ir =
         codegen::llvm::emit_for_development(&program, Some(environment.llvm_target_triple()));
-    let artifacts = match toolchain::build_for_native(&path, &llvm_ir, &environment) {
+    let artifacts = match toolchain::build_for_native(
+        &path,
+        &llvm_ir,
+        &environment,
+        program.ast().resolution,
+    ) {
         Ok(artifacts) => artifacts,
         Err(error) => {
             eprintln!("error: {error}");
@@ -282,7 +287,13 @@ fn development(args: &[OsString]) -> ExitCode {
     let llvm_ir =
         codegen::llvm::emit_for_development(&program, Some(environment.llvm_target_triple()));
 
-    match dev::run(&path, &llvm_ir, &environment, &options) {
+    match dev::run(
+        &path,
+        &llvm_ir,
+        &environment,
+        &options,
+        program.ast().resolution,
+    ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");
@@ -365,7 +376,7 @@ fn build(path: &Path) -> ExitCode {
         }
     };
     let llvm_ir = codegen::llvm::emit_for_target(&program, Some(environment.llvm_target_triple()));
-    match toolchain::build(path, &llvm_ir, &environment) {
+    match toolchain::build(path, &llvm_ir, &environment, program.ast().resolution) {
         Ok(artifacts) => {
             println!("Built: {}", display_path(&artifacts.executable).display());
             println!("LLVM IR: {}", display_path(&artifacts.llvm_ir).display());

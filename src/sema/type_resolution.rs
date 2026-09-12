@@ -41,7 +41,7 @@ impl LengthConstantEvaluator {
                 .iter()
                 .map(|declaration| (declaration.name.clone(), declaration.clone()))
                 .collect(),
-            cache: ConstantValues::new(),
+            cache: ConstantValues::new(program.resolution),
         }
     }
 

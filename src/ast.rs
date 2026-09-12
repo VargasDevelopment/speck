@@ -138,6 +138,7 @@ impl ConstantValue {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program {
+    pub resolution: crate::resolution::Resolution,
     pub title: String,
     pub title_span: Span,
     pub structs: Vec<StructDecl>,

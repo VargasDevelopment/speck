@@ -1,6 +1,8 @@
 ; Speck game: Crumb Bum
 source_filename = "speck"
 
+declare void @crumb_tone(float, float, float)
+declare void @crumb_noise(float, float)
 declare float @crumb_sin(float)
 declare void @crumb_print_i32(i32)
 declare void @crumb_debug_frame(i32, float)

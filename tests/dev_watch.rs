@@ -443,3 +443,33 @@ fi
         "compiler descendant survived cancellation"
     );
 }
+
+#[test]
+fn changing_resolution_replaces_frame_dimensions_at_the_same_viewer() {
+    let directory = support::workspace();
+    fs::write(directory.path().join("game.spk"), game("11")).unwrap();
+    let mut watch = Watcher::start(directory, None, None);
+    let mut previous = watch.color(11, 0);
+    for (width, height, red) in [(640, 360, 22), (333, 197, 33), (320, 180, 44)] {
+        watch.write("game.spk", &format!(
+            "game \"Sized\" resolution({width}, {height})\nstart {{}} update(dt:f32) {{}} draw {{ clear_rgb({red}, 0, 0) }}"
+        ));
+        let mut next = None;
+        watch.until(|this| {
+            let response = this.frame(previous.sequence());
+            if response.body.len() == width * height * 3 && response.body.first() == Some(&red) {
+                next = Some(response);
+                true
+            } else {
+                false
+            }
+        });
+        let next = next.unwrap();
+        assert_eq!(next.header("X-Speck-Width:"), width.to_string());
+        assert_eq!(next.header("X-Speck-Height:"), height.to_string());
+        assert!(next.sequence() > previous.sequence());
+        assert!(next.generation() > previous.generation());
+        previous = next;
+    }
+    watch.stop();
+}

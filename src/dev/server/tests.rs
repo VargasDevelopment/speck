@@ -39,6 +39,7 @@ fn serves_viewer_and_complete_binary_frame() {
 
     let pixels = vec![73_u8; FRAME_PAYLOAD_BYTES];
     frames.publish(Frame {
+        resolution: crate::resolution::Resolution::DEFAULT,
         sequence: 9,
         pixels: pixels.clone(),
     });
@@ -58,6 +59,7 @@ fn serves_viewer_and_complete_binary_frame() {
     // A restarted native process begins at 1; this same HTTP client must advance past 9.
     frames.begin_run();
     frames.publish(Frame {
+        resolution: crate::resolution::Resolution::DEFAULT,
         sequence: 1,
         pixels: vec![91; FRAME_PAYLOAD_BYTES],
     });

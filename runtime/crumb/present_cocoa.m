@@ -192,7 +192,7 @@ int crumb_present_init(void) {
         [crumb_window setDelegate:crumb_window_delegate];
         [crumb_window setContentView:crumb_view];
         [crumb_window
-            setContentMinSize:NSMakeSize(CRUMB_FRAMEBUFFER_WIDTH, CRUMB_FRAMEBUFFER_HEIGHT)];
+            setContentMinSize:NSMakeSize(320.0, 180.0)];
         [crumb_window setTitle:@"Speck"];
         [crumb_window center];
         [crumb_window makeKeyAndOrderFront:nil];

@@ -5,7 +5,8 @@ are whitespace, semicolons are optional after simple statements, and `//`
 begins a line comment.
 
 ```text
-program       = "game" string ";"? declaration* EOF ;
+program       = "game" string resolution? ";"? declaration* EOF ;
+resolution    = "resolution" "(" integer "," integer ")" ;
 declaration   = import | struct | constant | global | function | start | update | draw ;
 module        = (import | struct | constant | global | function)* EOF ;
 import        = "import" string "as" identifier ";"? ;
@@ -65,7 +66,25 @@ conversion. The lexer uses longest-match rules for `+=`, `-=`, `*=`, `/=`, `%=`,
 
 A game starts with its `game` title and owns the three lifecycle blocks.
 Other `.spk` files contain structs, constants, globals, named functions, and
-imports. They do not declare a game title or lifecycle blocks.
+imports. They do not declare a game title, resolution, or lifecycle blocks.
+
+The optional game-header clause selects the logical framebuffer size:
+
+```text
+game "Wide sketch" resolution(640, 360)
+```
+
+Without the clause, the framebuffer is 320 by 180 pixels. Each dimension must
+be a positive integer literal from 1 through 4096; any aspect ratio is allowed.
+Expressions, named constants,
+floats, zero, and negative dimensions are rejected. The clause may appear only
+once, directly after the title and before the optional semicolon, imports, or
+other declarations. `resolution` remains an ordinary identifier elsewhere.
+
+`FRAMEBUFFER_WIDTH` and `FRAMEBUFFER_HEIGHT` are immutable predefined `i32` constants
+with the selected dimensions. They work in expressions, constant and global
+initializers, and array lengths. Imported modules see the entry game's selected
+dimensions. User declarations and local bindings cannot replace these names.
 
 ```text
 // game.spk
@@ -470,12 +489,47 @@ The available effect-only functions all return real `void`:
 
 The built-in ABI and LLVM declarations use `void`; there is no fabricated
 result. RGB components clamp to 0 through 255. Filled rectangles use half-open
-bounds, clip to the 320x180 framebuffer, and do nothing for non-positive sizes
-or wholly off-screen rectangles. No graphics-specific language type is
+bounds, clip to the game's logical framebuffer, and do nothing for non-positive
+sizes or wholly off-screen rectangles. No graphics-specific language type is
 introduced.
 
 The quoted game title is compile-time metadata, not a general-purpose string
 value. Strings are otherwise absent from the type system.
+
+## Procedural audio
+
+`tone(frequency: f32, seconds: f32, volume: f32)` plays a sine tone and
+`noise(seconds: f32, volume: f32)` plays a short noise burst. Both return `void`.
+Playback is asynchronous and available through native macOS `speck run` only.
+`speck build` (PPM) and `speck dev` (browser) accept the same calls silently,
+without opening an audio device on the host.
+
+Frequency is in hertz, duration is in seconds, and volume ranges from 0.0 to 1.0.
+Tones outside 20–20,000 Hz, nonfinite arguments, nonpositive duration, and
+nonpositive volume do nothing. Durations above two seconds and finite volumes
+above 1.0 clamp to those limits. Durations shorter than two samples at 48 kHz
+are silent. Effects have a short attack and a decay to silence; volume 1.0
+leaves mixing headroom rather than producing a full-scale single voice.
+
+The runtime admits eight simultaneous effects and at most 32 pending commands.
+New effects are dropped when either capacity is full. Calls never wait for
+playback to finish. Audio-device initialization failure prints one warning and
+continues the game silently. Shutdown stops current sounds immediately, so a
+sound immediately followed by `quit()` may not be heard. There are no sound
+handles, looping, music files, or sample-loading APIs.
+
+For example, a high tone can mark a match, a brief noise burst can mark a
+mismatch, and a lower, longer tone can mark an escape:
+
+```speck
+tone(880.0, 0.08, 0.6)
+noise(0.06, 0.35)
+tone(220.0, 0.18, 0.5)
+```
+
+Call the desired effect once when its event occurs; calling it every update
+starts overlapping effects. `examples/audio_feedback.spk` offers a native
+keyboard audition of these three effects.
 
 ## Digital keyboard input and shutdown
 

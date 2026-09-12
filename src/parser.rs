@@ -7,6 +7,7 @@ use crate::ast::{
 };
 use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::{Token, TokenKind};
+use crate::resolution::{MAX_DIMENSION, Resolution};
 
 mod expression;
 mod limits;
@@ -94,7 +95,7 @@ impl Parser {
     }
 
     fn run(mut self, root: bool) -> Result<Program, Diagnostic> {
-        let (title, title_span) = if root {
+        let (title, title_span, resolution) = if root {
             self.expect(&TokenKind::Game, "expected `game` at the start of the file")?;
             let title_token = self.advance();
             let TokenKind::String(title) = title_token.kind else {
@@ -103,16 +104,28 @@ impl Parser {
                     title_token.span,
                 ));
             };
+            let resolution = if self.at_resolution() {
+                self.parse_resolution()?
+            } else {
+                Resolution::DEFAULT
+            };
             self.take(&TokenKind::Semicolon);
-            (title, title_token.span)
+            (title, title_token.span, resolution)
         } else {
-            (String::new(), self.current().span)
+            (String::new(), self.current().span, Resolution::DEFAULT)
         };
         let mut structs = Vec::new();
         let mut constants = Vec::new();
         let mut globals = Vec::new();
         let mut functions = Vec::new();
         while !self.at(&TokenKind::Eof) {
+            if self.at_resolution() {
+                return Err(self.error_here(if root {
+                    "resolution may be declared only once, immediately after the game title"
+                } else {
+                    "imported files cannot declare resolution; set it in the game header"
+                }));
+            }
             if !root
                 && matches!(
                     self.current().kind,
@@ -147,6 +160,7 @@ impl Parser {
         }
 
         Ok(Program {
+            resolution,
             title,
             title_span,
             structs,
@@ -154,6 +168,47 @@ impl Parser {
             globals,
             functions,
         })
+    }
+
+    fn at_resolution(&self) -> bool {
+        matches!(&self.current().kind, TokenKind::Identifier(name) if name == "resolution")
+    }
+
+    fn parse_resolution(&mut self) -> Result<Resolution, Diagnostic> {
+        let start = self.advance().span;
+        self.expect(&TokenKind::LeftParen, "expected `(` after `resolution`")?;
+        let width = self.resolution_dimension("width")?;
+        self.expect(
+            &TokenKind::Comma,
+            "expected `,` between resolution dimensions",
+        )?;
+        let height = self.resolution_dimension("height")?;
+        let end = self
+            .expect(
+                &TokenKind::RightParen,
+                "expected `)` after resolution dimensions",
+            )?
+            .span;
+        Resolution::new(width, height).map_err(|message| Diagnostic::new(message, start.merge(end)))
+    }
+
+    fn resolution_dimension(&mut self, name: &str) -> Result<u16, Diagnostic> {
+        let token = self.advance();
+        let TokenKind::Integer(value) = token.kind else {
+            return Err(Diagnostic::new(
+                format!(
+                    "resolution {name} must be a positive integer literal between 1 and {MAX_DIMENSION}"
+                ),
+                token.span,
+            ));
+        };
+        if !(1..=i64::from(MAX_DIMENSION)).contains(&value) {
+            return Err(Diagnostic::new(
+                format!("resolution {name} must be between 1 and {MAX_DIMENSION}, found {value}"),
+                token.span,
+            ));
+        }
+        Ok(value as u16)
     }
 
     fn parse_import(&mut self) -> Result<Import, Diagnostic> {

@@ -1,0 +1,143 @@
+#include "crumb.h"
+#include "audio_internal.h"
+
+#include <assert.h>
+#include <float.h>
+#include <limits.h>
+#include <math.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdlib.h>
+#include <string.h>
+
+static int16_t samples[CRUMB_AUDIO_SAMPLE_RATE * 2 + 1];
+static int16_t reference[CRUMB_AUDIO_SAMPLE_RATE * 2 + 1];
+
+static void reset(void) {
+    crumb_audio_reset();
+    crumb_audio_enable(1);
+}
+
+static void assert_silent(size_t count) {
+    memset(samples, 0x7f, count * sizeof *samples);
+    crumb_audio_render(samples, count);
+    for (size_t i = 0; i < count; ++i) {
+        assert(samples[i] == 0);
+    }
+}
+
+static void tone_duration_frequency_and_envelope(void) {
+    int crossings = 0;
+    int early_peak = 0;
+    int late_peak = 0;
+    reset();
+    crumb_tone(1000.0f, 0.1f, 1.0f);
+    crumb_audio_render(samples, 4801);
+    assert(samples[0] == 0 && samples[4799] == 0 && samples[4800] == 0);
+    for (int i = 1; i < 4800; ++i) {
+        crossings += samples[i - 1] <= 0 && samples[i] > 0;
+        if (i < 2400 && abs(samples[i]) > early_peak) early_peak = abs(samples[i]);
+        if (i >= 2400 && abs(samples[i]) > late_peak) late_peak = abs(samples[i]);
+    }
+    assert(crossings >= 99 && crossings <= 101);
+    assert(early_peak > 7000 && early_peak <= 8192);
+    assert(late_peak < early_peak / 2 + 100);
+    assert_silent(256);
+}
+
+static void validation_and_clamps(void) {
+    const float invalid[] = {NAN, INFINITY, -INFINITY, -1.0f, 0.0f};
+    for (size_t i = 0; i < sizeof invalid / sizeof *invalid; ++i) {
+        reset();
+        crumb_tone(invalid[i], 0.1f, 1.0f);
+        crumb_tone(1000.0f, invalid[i], 1.0f);
+        crumb_tone(1000.0f, 0.1f, invalid[i]);
+        crumb_noise(invalid[i], 1.0f);
+        crumb_noise(0.1f, invalid[i]);
+        assert_silent(256);
+    }
+    reset();
+    crumb_tone(19.0f, 0.1f, 1.0f);
+    crumb_tone(20001.0f, 0.1f, 1.0f);
+    crumb_noise(FLT_MIN, 1.0f);
+    assert_silent(256);
+    reset();
+    crumb_tone(1000.0f, FLT_MAX, FLT_MAX);
+    crumb_audio_render(reference, CRUMB_AUDIO_SAMPLE_RATE * 2 + 1);
+    reset();
+    crumb_tone(1000.0f, 2.0f, 1.0f);
+    crumb_audio_render(samples, CRUMB_AUDIO_SAMPLE_RATE * 2 + 1);
+    assert(memcmp(samples, reference, sizeof samples) == 0);
+    assert(samples[CRUMB_AUDIO_SAMPLE_RATE * 2 - 1] == 0);
+    assert(samples[CRUMB_AUDIO_SAMPLE_RATE * 2] == 0);
+}
+
+static void deterministic_noise_and_chunk_boundaries(void) {
+    int nonzero = 0;
+    reset();
+    crumb_noise(0.1f, 1.0f);
+    crumb_audio_render(reference, 4801);
+    reset();
+    crumb_noise(0.1f, 1.0f);
+    crumb_audio_render(samples, 173);
+    crumb_audio_render(samples + 173, 4628);
+    assert(memcmp(samples, reference, 4801 * sizeof *samples) == 0);
+    for (int i = 0; i < 4800; ++i) nonzero += samples[i] != 0;
+    assert(nonzero > 4700);
+    assert(samples[0] == 0 && samples[4799] == 0 && samples[4800] == 0);
+}
+
+static void bounded_overload_and_reset(void) {
+    reset();
+    for (int i = 0; i < CRUMB_AUDIO_VOICES; ++i) crumb_tone(1000.0f, 0.01f, 1.0f);
+    crumb_audio_render(reference, 512);
+    reset();
+    for (int i = 0; i < 10000; ++i) crumb_tone(1000.0f, 0.01f, 1.0f);
+    crumb_audio_render(samples, 512);
+    assert(memcmp(samples, reference, 512 * sizeof *samples) == 0);
+    /* Overflow was dropped, not deferred until voices finish. */
+    assert_silent(512);
+    /* Repeated batches cross the ring's physical end and reuse expired voices. */
+    for (int batch = 0; batch < 100; ++batch) {
+        for (int i = 0; i < CRUMB_AUDIO_VOICES; ++i) crumb_tone(1000.0f, 0.01f, 1.0f);
+        crumb_audio_render(samples, 512);
+        assert(memcmp(samples, reference, 512 * sizeof *samples) == 0);
+    }
+    crumb_noise(2.0f, 1.0f);
+    crumb_audio_render(samples, 256);
+    crumb_noise(2.0f, 1.0f);
+    crumb_audio_reset();
+    assert_silent(256);
+    crumb_audio_enable(1);
+    assert_silent(256);
+}
+
+static atomic_int producer_done;
+
+static void *produce(void *unused) {
+    (void)unused;
+    for (int i = 0; i < 100000; ++i) crumb_tone(20.0f + (float)(i % 19981), 0.003f, 1.0f);
+    atomic_store(&producer_done, 1);
+    return NULL;
+}
+
+static void concurrent_submission(void) {
+    pthread_t producer;
+    reset();
+    assert(pthread_create(&producer, NULL, produce, NULL) == 0);
+    do {
+        crumb_audio_render(samples, 256);
+    } while (!atomic_load(&producer_done));
+    assert(pthread_join(producer, NULL) == 0);
+    crumb_audio_render(samples, 256);
+    assert_silent(256);
+}
+
+int main(void) {
+    tone_duration_frequency_and_envelope();
+    validation_and_clamps();
+    deterministic_noise_and_chunk_boundaries();
+    bounded_overload_and_reset();
+    concurrent_submission();
+    return 0;
+}
