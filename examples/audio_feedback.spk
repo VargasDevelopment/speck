@@ -1,0 +1,43 @@
+game "Audio Feedback"
+
+// Native macOS: W = match, A = mismatch, D = escape. Escape closes the window.
+// PPM builds and browser development accept audio calls silently.
+let flash: f32 = 0.0
+let effect: i32 = 0
+
+start {}
+
+update(dt: f32) {
+    flash -= dt
+    if key_pressed(KEY_W) {
+        tone(880.0, 0.08, 0.6)
+        effect = 1
+        flash = 0.2
+    }
+    if key_pressed(KEY_A) {
+        noise(0.06, 0.35)
+        tone(110.0, 0.10, 0.3)
+        effect = 2
+        flash = 0.2
+    }
+    if key_pressed(KEY_D) {
+        tone(220.0, 0.18, 0.5)
+        effect = 3
+        flash = 0.2
+    }
+    if key_pressed(KEY_ESCAPE) {
+        quit()
+    }
+}
+
+draw {
+    clear_rgb(20, 24, 32)
+    fill_rect(40, 70, 60, 40, 32, 64, 48)
+    fill_rect(130, 70, 60, 40, 64, 32, 40)
+    fill_rect(220, 70, 60, 40, 40, 48, 72)
+    if flash > 0.0 {
+        if effect == 1 { fill_rect(40, 70, 60, 40, 80, 220, 130) }
+        if effect == 2 { fill_rect(130, 70, 60, 40, 240, 90, 110) }
+        if effect == 3 { fill_rect(220, 70, 60, 40, 100, 150, 240) }
+    }
+}

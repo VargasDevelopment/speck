@@ -111,7 +111,11 @@ static int crumb_frame_limit(void) {
 int crumb_init(void) {
     crumb_input_reset();
     crumb_clear_rgb(0, 0, 0);
-    return crumb_present_init();
+    if (crumb_present_init() != 0) {
+        return 1;
+    }
+    crumb_audio_init();
+    return 0;
 }
 
 float crumb_frame_delta(void) { return 1.0f / 60.0f; }
@@ -149,6 +153,7 @@ void crumb_remainder_fail(int dividend, int divisor) {
 }
 
 void crumb_shutdown(void) {
+    crumb_audio_shutdown();
     crumb_input_release_all();
     crumb_present_shutdown();
 }

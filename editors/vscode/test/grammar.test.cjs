@@ -66,8 +66,8 @@ test('all compiler keywords and built-in names stay covered', () => {
     const names = [...builtins.matchAll(/name: "([A-Za-z0-9_]+)"/g)].map(match => match[1]);
     assert.ok(names.length >= 19);
     for (const name of names) {
-        has(line(name.startsWith('KEY_') ? name : `${name}()`), name,
-            name.startsWith('KEY_') ? 'support.constant.speck' : 'support.function.speck');
+        has(line(/^[A-Z_]+$/.test(name) ? name : `${name}()`), name,
+            /^[A-Z_]+$/.test(name) ? 'support.constant.speck' : 'support.function.speck');
         has(line(`${name}_suffix`), `${name}_suffix`, 'variable.other.speck');
     }
 });

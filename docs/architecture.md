@@ -188,7 +188,7 @@ object, or runtime metadata.
 
 CRuMB's graphics path is split by responsibility:
 
-- `framebuffer.c` owns a packed, row-major 320x180 RGB framebuffer and implements
+- `framebuffer.c` owns a packed, row-major RGB framebuffer with per-game dimensions (320x180 by default) and implements
   clear and clipped filled-rectangle rasterization.
 - `input.c` owns fixed current, pressed, and released bytes for CRuMB's eleven
   portable key identifiers plus the runtime quit flag. It allocates nothing,
@@ -212,7 +212,7 @@ CRuMB's graphics path is split by responsibility:
   no work beyond setting `sig_atomic_t`; `crumb.c` observes it between frames,
   shuts down the selected presenter, and restores the previous handler.
 
-The public C ABI provides fixed framebuffer dimensions and pixel access, the
+The public C ABI provides compile-time per-game framebuffer dimensions and pixel access, the
 typed functions emitted by Speck, and the four input/quit functions. Stable key
 numbers live only in CRuMB's private header and the compiler's predefined
 constants. Browser codes, HTTP, TCP, AppKit, `NSEvent`, and macOS hardware codes
@@ -268,6 +268,30 @@ by more than one interval is reset rather than causing an extended catch-up
 burst. The Speck-visible `dt` remains the provisional fixed `1/60`; it is
 simulation time, not a measurement of wall-clock work or display refresh.
 
+## Native procedural audio
+
+The public `crumb_tone` and `crumb_noise` functions lower from table-defined
+Speck builtins. Cocoa builds compile `audio.c` and `audio_macos.c`, linking the
+system AudioToolbox framework. PPM and stream builds instead compile
+`audio_null.c`; remote browser development never opens a device on the game
+host. Audio is a separate runtime subsystem, not part of the Cocoa window.
+
+`audio.c` validates requests and sends immutable commands through a fixed
+32-entry single-producer/single-consumer queue with lock-free C11 atomics.
+The callback alone owns eight voices. It snapshots pending commands per buffer,
+drops new requests at capacity, and renders 48 kHz mono signed 16-bit PCM.
+Sine tones and deterministic pseudo-random noise use a short attack and decay;
+mixing reserves per-voice headroom and clamps the final sum. Rendering performs
+no allocation, locking, logging, or calls into Speck. Tests exercise synthesis
+without audio hardware, including concurrent submission and numerical extremes.
+
+`audio_macos.c` opens one AudioQueue with three 256-sample buffers. Audio starts
+before `spk_start`; an initialization failure cleans up and prints one warning
+without failing the game. All normal exits synchronously dispose the queue
+before resetting mixer storage. The SDK guarantees no subsequent callbacks
+when disposal returns outside a callback. A callback enqueue failure disables
+further effects without logging or tearing down hardware on the audio thread.
+
 ## Development browser presenter
 
 `speck dev` is a host-side orchestration mode, not a different language. It
@@ -312,7 +336,7 @@ tool. They do not appear in a generated normal game executable.
 - CRuMB uses `printf` solely for development verification.
 - Keyboard input is limited to eleven fixed digital keys. There is no text,
   mouse, controller, rebinding, or arbitrary-key API.
-- The Cocoa presenter has no audio, assets, allocation API, display-link
+- The Cocoa presenter has no assets, allocation API, display-link
   synchronization, full-screen mode, or game-specific behavior. It redraws at
   a deadline-paced nominal 60 Hz rather than synchronizing to the monitor's
   refresh, so frame delivery can drift, tear, or skip under load.

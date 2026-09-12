@@ -8,8 +8,12 @@ extern "C" {
 #endif
 
 #define CRUMB_ABI_VERSION 1
+#ifndef CRUMB_FRAMEBUFFER_WIDTH
 #define CRUMB_FRAMEBUFFER_WIDTH 320
+#endif
+#ifndef CRUMB_FRAMEBUFFER_HEIGHT
 #define CRUMB_FRAMEBUFFER_HEIGHT 180
+#endif
 #define CRUMB_FRAMEBUFFER_CHANNELS 3
 #define CRUMB_FRAMEBUFFER_STRIDE (CRUMB_FRAMEBUFFER_WIDTH * CRUMB_FRAMEBUFFER_CHANNELS)
 #define CRUMB_FRAMEBUFFER_BYTES (CRUMB_FRAMEBUFFER_STRIDE * CRUMB_FRAMEBUFFER_HEIGHT)
@@ -23,6 +27,8 @@ void spk_draw(void);
 int crumb_init(void);
 float crumb_frame_delta(void);
 float crumb_sin(float angle);
+void crumb_tone(float frequency, float seconds, float volume);
+void crumb_noise(float seconds, float volume);
 void crumb_print_i32(int value);
 void crumb_debug_frame(int frame, float value);
 void crumb_source_location(const char *path, int line, int column);

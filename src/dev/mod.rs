@@ -38,11 +38,13 @@ pub fn run(
     llvm_ir: &str,
     environment: &BuildEnvironment,
     options: &Options,
+    resolution: crate::resolution::Resolution,
 ) -> Result<(), String> {
     let mut session = session::Session::start(options)?;
     let environment = environment.with_cancellation(session.cancelled.clone());
     let result = (|| {
-        let artifacts = toolchain::build_for_development(source_path, llvm_ir, &environment)?;
+        let artifacts =
+            toolchain::build_for_development(source_path, llvm_ir, &environment, resolution)?;
         if session.is_cancelled() {
             return Ok(());
         }

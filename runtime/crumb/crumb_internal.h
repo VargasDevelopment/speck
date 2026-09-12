@@ -22,6 +22,9 @@ enum crumb_key {
     CRUMB_KEY_COUNT = 11
 };
 
+void crumb_audio_init(void);
+void crumb_audio_shutdown(void);
+
 int crumb_present_init(void);
 int crumb_present_poll(void);
 int crumb_present(void);

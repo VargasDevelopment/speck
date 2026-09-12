@@ -8,6 +8,7 @@ pub mod diagnostic;
 pub mod lexer;
 mod modules;
 pub mod parser;
+pub mod resolution;
 mod runtime_sources;
 pub mod sema;
 pub mod source;
@@ -18,6 +19,7 @@ use std::path::Path;
 use diagnostic::Diagnostic;
 
 pub use checked::{CheckedProgram, analyze, analyze_path};
+pub use resolution::Resolution;
 pub use source::AnalysisError;
 
 pub fn compile_to_llvm(source: &str) -> Result<String, Vec<Diagnostic>> {

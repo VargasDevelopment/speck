@@ -7,12 +7,25 @@ pub struct BuiltinFunction {
     pub llvm_symbol: &'static str,
 }
 
+#[derive(Clone)]
 pub struct PredefinedConstant {
     pub name: &'static str,
     pub value: ConstantValue,
 }
 
 pub const FUNCTIONS: &[BuiltinFunction] = &[
+    BuiltinFunction {
+        name: "tone",
+        params: &[ValueType::F32, ValueType::F32, ValueType::F32],
+        return_type: ReturnType::Void,
+        llvm_symbol: "@crumb_tone",
+    },
+    BuiltinFunction {
+        name: "noise",
+        params: &[ValueType::F32, ValueType::F32],
+        return_type: ReturnType::Void,
+        llvm_symbol: "@crumb_noise",
+    },
     BuiltinFunction {
         name: "sin",
         params: &[ValueType::F32],
@@ -69,7 +82,7 @@ pub const FUNCTIONS: &[BuiltinFunction] = &[
     },
 ];
 
-pub const CONSTANTS: &[PredefinedConstant] = &[
+const KEY_CONSTANTS: &[PredefinedConstant] = &[
     PredefinedConstant {
         name: "KEY_W",
         value: ConstantValue::I32(0),
@@ -116,9 +129,22 @@ pub const CONSTANTS: &[PredefinedConstant] = &[
     },
 ];
 
-pub fn predefined_constant(name: &str) -> Option<ConstantValue> {
-    CONSTANTS
-        .iter()
-        .find(|constant| constant.name == name)
-        .map(|constant| constant.value.clone())
+/// All predefined values for one game's logical framebuffer.
+pub fn constants(
+    resolution: crate::resolution::Resolution,
+) -> impl Iterator<Item = PredefinedConstant> {
+    KEY_CONSTANTS.iter().cloned().chain([
+        PredefinedConstant {
+            name: "FRAMEBUFFER_WIDTH",
+            value: ConstantValue::I32(i32::from(resolution.width())),
+        },
+        PredefinedConstant {
+            name: "FRAMEBUFFER_HEIGHT",
+            value: ConstantValue::I32(i32::from(resolution.height())),
+        },
+    ])
+}
+
+pub fn is_predefined_constant(name: &str) -> bool {
+    constants(crate::resolution::Resolution::DEFAULT).any(|constant| constant.name == name)
 }

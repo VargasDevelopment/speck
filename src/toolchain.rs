@@ -8,6 +8,8 @@ use std::sync::{Arc, atomic::AtomicBool};
 
 mod process;
 
+use crate::resolution::Resolution;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HostTarget {
     LinuxX86_64,
@@ -247,6 +249,13 @@ impl Presenter {
         }
     }
 
+    const fn audio_sources(self) -> &'static [&'static str] {
+        match self {
+            Self::Cocoa => &["audio.c", "audio_macos.c"],
+            Self::Ppm | Self::DevelopmentStream => &["audio_null.c"],
+        }
+    }
+
     const fn output_suffix(self) -> &'static str {
         match self {
             Self::Ppm => "",
@@ -273,7 +282,14 @@ impl Presenter {
     const fn link_args(self) -> &'static [&'static str] {
         match self {
             Self::Ppm | Self::DevelopmentStream => &[],
-            Self::Cocoa => &["-framework", "AppKit", "-framework", "CoreGraphics"],
+            Self::Cocoa => &[
+                "-framework",
+                "AppKit",
+                "-framework",
+                "CoreGraphics",
+                "-framework",
+                "AudioToolbox",
+            ],
         }
     }
 
@@ -293,20 +309,29 @@ pub fn build(
     source_path: &Path,
     llvm_ir: &str,
     environment: &BuildEnvironment,
+    resolution: Resolution,
 ) -> Result<BuildArtifacts, String> {
-    build_with_presenter(source_path, llvm_ir, environment, Presenter::Ppm)
+    build_with_presenter(
+        source_path,
+        llvm_ir,
+        environment,
+        Presenter::Ppm,
+        resolution,
+    )
 }
 
 pub fn build_for_development(
     source_path: &Path,
     llvm_ir: &str,
     environment: &BuildEnvironment,
+    resolution: Resolution,
 ) -> Result<BuildArtifacts, String> {
     build_with_presenter(
         source_path,
         llvm_ir,
         environment,
         Presenter::DevelopmentStream,
+        resolution,
     )
 }
 
@@ -314,9 +339,10 @@ pub fn build_for_native(
     source_path: &Path,
     llvm_ir: &str,
     environment: &BuildEnvironment,
+    resolution: Resolution,
 ) -> Result<BuildArtifacts, String> {
     let presenter = Presenter::native_for_target(environment.target())?;
-    build_with_presenter(source_path, llvm_ir, environment, presenter)
+    build_with_presenter(source_path, llvm_ir, environment, presenter, resolution)
 }
 
 fn build_with_presenter(
@@ -324,6 +350,7 @@ fn build_with_presenter(
     llvm_ir: &str,
     environment: &BuildEnvironment,
     presenter: Presenter,
+    resolution: Resolution,
 ) -> Result<BuildArtifacts, String> {
     let artifact_name = artifact_name(source_path)?;
     let output_name = format!("{artifact_name}{}", presenter.output_suffix());
@@ -345,7 +372,7 @@ fn build_with_presenter(
 
     let llvm_validation =
         validate_and_compile_ir(environment, &llvm_path, &bitcode_path, &object_path)?;
-    let crumb_objects = compile_runtime(environment, &build_dir, presenter)?;
+    let crumb_objects = compile_runtime(environment, &build_dir, presenter, resolution)?;
     link_executable(
         environment,
         &object_path,
@@ -513,17 +540,21 @@ fn compile_runtime(
     environment: &BuildEnvironment,
     build_dir: &Path,
     presenter: Presenter,
+    resolution: Resolution,
 ) -> Result<Vec<PathBuf>, String> {
     let runtime_sources = crate::runtime_sources::RuntimeSources::materialize(build_dir)?;
     let crumb_dir = &runtime_sources.directory;
     let common_sources = ["crumb.c", "input.c", "framebuffer.c", presenter.source()];
-    let sources = common_sources.into_iter().chain(
-        environment
-            .target
-            .runtime_platform_sources()
-            .iter()
-            .copied(),
-    );
+    let sources = common_sources
+        .into_iter()
+        .chain(presenter.audio_sources().iter().copied())
+        .chain(
+            environment
+                .target
+                .runtime_platform_sources()
+                .iter()
+                .copied(),
+        );
     let mut objects = Vec::new();
 
     for source_name in sources {
@@ -552,6 +583,8 @@ fn compile_runtime(
                 .map(OsString::from),
         );
         args.extend(presenter.compile_definitions().iter().map(OsString::from));
+        args.push(format!("-DCRUMB_FRAMEBUFFER_WIDTH={}", resolution.width()).into());
+        args.push(format!("-DCRUMB_FRAMEBUFFER_HEIGHT={}", resolution.height()).into());
         if source_name == presenter.source() {
             args.extend(presenter.source_compile_args().iter().map(OsString::from));
         }
@@ -859,8 +892,23 @@ mod tests {
         );
         assert_eq!(
             Presenter::Cocoa.link_args(),
-            ["-framework", "AppKit", "-framework", "CoreGraphics"]
+            [
+                "-framework",
+                "AppKit",
+                "-framework",
+                "CoreGraphics",
+                "-framework",
+                "AudioToolbox"
+            ]
         );
+        assert_eq!(
+            Presenter::Cocoa.audio_sources(),
+            ["audio.c", "audio_macos.c"]
+        );
+        for presenter in [Presenter::Ppm, Presenter::DevelopmentStream] {
+            assert_eq!(presenter.audio_sources(), ["audio_null.c"]);
+            assert!(!presenter.link_args().contains(&"AudioToolbox"));
+        }
         assert!(!Presenter::Ppm.link_args().contains(&"AppKit"));
         assert!(!Presenter::DevelopmentStream.link_args().contains(&"AppKit"));
     }

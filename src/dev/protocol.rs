@@ -1,8 +1,9 @@
+use crate::resolution::Resolution;
 use std::fmt;
 use std::io::{self, Read};
 
-pub const FRAME_WIDTH: u16 = 320;
-pub const FRAME_HEIGHT: u16 = 180;
+pub const FRAME_WIDTH: u16 = Resolution::DEFAULT.width();
+pub const FRAME_HEIGHT: u16 = Resolution::DEFAULT.height();
 pub const FRAME_CHANNELS: usize = 3;
 pub const FRAME_PAYLOAD_BYTES: usize =
     FRAME_WIDTH as usize * FRAME_HEIGHT as usize * FRAME_CHANNELS;
@@ -108,6 +109,7 @@ impl BrowserInput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Frame {
     pub sequence: u64,
+    pub resolution: Resolution,
     pub pixels: Vec<u8>,
 }
 
@@ -129,21 +131,29 @@ impl fmt::Display for ProtocolError {
 impl std::error::Error for ProtocolError {}
 
 pub fn encode_frame(sequence: u64, pixels: &[u8]) -> Result<Vec<u8>, ProtocolError> {
-    if pixels.len() != FRAME_PAYLOAD_BYTES {
+    encode_frame_at_resolution(sequence, Resolution::DEFAULT, pixels)
+}
+
+pub fn encode_frame_at_resolution(
+    sequence: u64,
+    resolution: Resolution,
+    pixels: &[u8],
+) -> Result<Vec<u8>, ProtocolError> {
+    let payload_bytes = resolution.payload_bytes();
+    if pixels.len() != payload_bytes {
         return Err(ProtocolError::new(format!(
-            "RGB8 payload must contain {FRAME_PAYLOAD_BYTES} bytes, found {}",
+            "RGB8 payload must contain {payload_bytes} bytes, found {}",
             pixels.len()
         )));
     }
-
-    let mut encoded = Vec::with_capacity(FRAME_HEADER_BYTES + FRAME_PAYLOAD_BYTES);
+    let mut encoded = Vec::with_capacity(FRAME_HEADER_BYTES + payload_bytes);
     encoded.extend_from_slice(MAGIC);
     encoded.push(VERSION);
     encoded.push(PIXEL_FORMAT_RGB8);
     encoded.extend_from_slice(&(FRAME_HEADER_BYTES as u16).to_be_bytes());
-    encoded.extend_from_slice(&FRAME_WIDTH.to_be_bytes());
-    encoded.extend_from_slice(&FRAME_HEIGHT.to_be_bytes());
-    encoded.extend_from_slice(&(FRAME_PAYLOAD_BYTES as u32).to_be_bytes());
+    encoded.extend_from_slice(&resolution.width().to_be_bytes());
+    encoded.extend_from_slice(&resolution.height().to_be_bytes());
+    encoded.extend_from_slice(&(payload_bytes as u32).to_be_bytes());
     encoded.extend_from_slice(&sequence.to_be_bytes());
     encoded.extend_from_slice(pixels);
     Ok(encoded)
@@ -256,13 +266,17 @@ pub fn read_frame(reader: &mut impl Read) -> Result<Option<Frame>, ProtocolError
     reader
         .read_exact(&mut header[1..])
         .map_err(|error| truncated("frame header", error))?;
-    let sequence = validate_header(&header)?;
+    let (sequence, resolution) = validate_header(&header)?;
 
-    let mut pixels = vec![0_u8; FRAME_PAYLOAD_BYTES];
+    let mut pixels = vec![0_u8; resolution.payload_bytes()];
     reader
         .read_exact(&mut pixels)
         .map_err(|error| truncated("frame payload", error))?;
-    Ok(Some(Frame { sequence, pixels }))
+    Ok(Some(Frame {
+        sequence,
+        resolution,
+        pixels,
+    }))
 }
 
 fn read_first_byte(reader: &mut impl Read, byte: &mut u8) -> Result<bool, ProtocolError> {
@@ -285,7 +299,7 @@ fn read_first_byte(reader: &mut impl Read, byte: &mut u8) -> Result<bool, Protoc
     }
 }
 
-fn validate_header(header: &[u8; FRAME_HEADER_BYTES]) -> Result<u64, ProtocolError> {
+fn validate_header(header: &[u8; FRAME_HEADER_BYTES]) -> Result<(u64, Resolution), ProtocolError> {
     if &header[0..4] != MAGIC {
         return Err(ProtocolError::new("invalid frame magic; expected `SPKF`"));
     }
@@ -312,20 +326,18 @@ fn validate_header(header: &[u8; FRAME_HEADER_BYTES]) -> Result<u64, ProtocolErr
             "invalid frame header length {header_bytes}; expected {FRAME_HEADER_BYTES}"
         )));
     }
-    if width != FRAME_WIDTH || height != FRAME_HEIGHT {
+    let resolution = Resolution::new(width, height).map_err(ProtocolError::new)?;
+    let expected_bytes = resolution.payload_bytes();
+    if payload_bytes != expected_bytes {
         return Err(ProtocolError::new(format!(
-            "invalid framebuffer dimensions {width}x{height}; expected {FRAME_WIDTH}x{FRAME_HEIGHT}"
+            "invalid frame payload length {payload_bytes}; expected {expected_bytes}"
         )));
     }
-    if payload_bytes != FRAME_PAYLOAD_BYTES {
-        return Err(ProtocolError::new(format!(
-            "invalid frame payload length {payload_bytes}; expected {FRAME_PAYLOAD_BYTES}"
-        )));
-    }
-    Ok(u64::from_be_bytes([
+    let sequence = u64::from_be_bytes([
         header[16], header[17], header[18], header[19], header[20], header[21], header[22],
         header[23],
-    ]))
+    ]);
+    Ok((sequence, resolution))
 }
 
 fn truncated(part: &str, error: io::Error) -> ProtocolError {
@@ -390,12 +402,31 @@ mod tests {
     }
 
     #[test]
+    fn variable_frames_validate_lengths_and_allocation_bounds() {
+        let resolution = Resolution::new(640, 360).unwrap();
+        let pixels = vec![63; resolution.payload_bytes()];
+        let mut encoded = encode_frame_at_resolution(7, resolution, &pixels).unwrap();
+        let frame = read_frame(&mut Cursor::new(&encoded)).unwrap().unwrap();
+        assert_eq!(frame.resolution, resolution);
+        assert_eq!(frame.pixels, pixels);
+        assert!(encode_frame_at_resolution(8, resolution, &[0; 3]).is_err());
+        // Reject oversized dimensions from the header before trying to read/allocate a payload.
+        encoded[8..10].copy_from_slice(&4097_u16.to_be_bytes());
+        let error = read_frame(&mut Cursor::new(&encoded[..FRAME_HEADER_BYTES])).unwrap_err();
+        assert!(error.to_string().contains("resolution width"));
+        encoded[8..10].copy_from_slice(&640_u16.to_be_bytes());
+        encoded[10..12].copy_from_slice(&0_u16.to_be_bytes());
+        let error = read_frame(&mut Cursor::new(&encoded[..FRAME_HEADER_BYTES])).unwrap_err();
+        assert!(error.to_string().contains("resolution height"));
+    }
+
+    #[test]
     fn rejects_invalid_metadata() {
         let pixels = sample_pixels();
         let mut encoded = encode_frame(1, &pixels).expect("frame should encode");
-        encoded[8..10].copy_from_slice(&321_u16.to_be_bytes());
+        encoded[8..10].copy_from_slice(&0_u16.to_be_bytes());
         let error = read_frame(&mut Cursor::new(encoded)).expect_err("width should be rejected");
-        assert!(error.to_string().contains("dimensions 321x180"));
+        assert!(error.to_string().contains("resolution width"));
 
         let mut encoded = encode_frame(1, &pixels).expect("frame should encode");
         encoded[12..16].copy_from_slice(&12_u32.to_be_bytes());

@@ -33,13 +33,14 @@ impl<'a> ConstantEvaluator<'a> {
         globals: &'a HashMap<String, ValueType>,
         structs: &'a HashMap<String, StructDecl>,
         invalid: &'a HashSet<String>,
+        resolution: crate::resolution::Resolution,
     ) -> Self {
         Self {
             definitions,
             globals,
             structs,
             invalid,
-            cache: ConstantValues::new(),
+            cache: ConstantValues::new(resolution),
         }
     }
 

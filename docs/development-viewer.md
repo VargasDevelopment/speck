@@ -113,6 +113,10 @@ presentation after `spk_draw`, and presenter shutdown.
   links the Cocoa presenter. It runs without a frame limit by default; the CLI's
   `--frames` option supplies a bounded test override.
 
+Procedural `tone` and `noise` effects play only in native macOS `speck run`.
+PPM builds and browser development accept these calls silently and do not open
+an audio device on the game host. Browser audio transport is not implemented.
+
 Neither selection changes the Speck source, framebuffer drawing operations, or
 portable input semantics. The transport environment variables are a private
 contract between the development command and its development runtime.
@@ -133,11 +137,11 @@ raw RGB payload:
 | 4 | 1 | Version | `1` |
 | 5 | 1 | Pixel format | `1` (`RGB8`) |
 | 6 | 2 | Header length | `24` |
-| 8 | 2 | Width | `320` |
-| 10 | 2 | Height | `180` |
-| 12 | 4 | Payload length | `172800` |
+| 8 | 2 | Width | Game width, `1..4096` (default `320`) |
+| 10 | 2 | Height | Game height, `1..4096` (default `180`) |
+| 12 | 4 | Payload length | `width × height × 3` |
 | 16 | 8 | Sequence number | Monotonically increasing, starting at `1` |
-| 24 | 172800 | Pixel payload | Packed row-major red, green, blue bytes |
+| 24 | width × height × 3 | Pixel payload | Packed row-major red, green, blue bytes |
 
 The receiver rejects invalid metadata, out-of-order sequences, cleanly
 truncated headers, and truncated payloads. It publishes a frame only after the
@@ -247,3 +251,7 @@ On macOS ARM64, a minimal `print_i32(0)` program built to 34,744 bytes both
 before and after this change with ordinary `speck build`. Located builds
 intentionally retain paths used by their guard failures; their size depends on
 the program and source paths.
+
+The viewer reads dimensions from each validated frame and resizes its canvas when
+a watched game changes resolution. RGB8 framing stays version 1; dimensions are
+validated before allocation and payload length must exactly match width × height × 3.

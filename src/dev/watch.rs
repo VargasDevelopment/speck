@@ -90,7 +90,12 @@ pub fn run(
                         &program,
                         Some(environment.llvm_target_triple()),
                     );
-                    let result = toolchain::build_for_development(path, &llvm, &environment);
+                    let result = toolchain::build_for_development(
+                        path,
+                        &llvm,
+                        &environment,
+                        program.ast().resolution,
+                    );
                     // An edit during analysis/native compilation must never be marked as compiled.
                     if current(&snapshot) != snapshot {
                         rebuild = true;

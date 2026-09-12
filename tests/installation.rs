@@ -52,7 +52,7 @@ fn installed_compiler_builds_without_its_source_tree() {
     // location no longer exists; the user's actual checkout was never moved.
     fs::write(
         work.join("game.spk"),
-        "game \"Installed\"\nstart { print_i32(42) }\nupdate(dt: f32) {}\ndraw {}\n",
+        "game \"Installed\"\nstart {\n tone(880.0, 0.08, 0.0)\n noise(0.05, 0.0)\n print_i32(42)\n }\nupdate(dt: f32) {}\ndraw {}\n",
     )
     .unwrap();
     run(
@@ -73,6 +73,13 @@ fn installed_compiler_builds_without_its_source_tree() {
         Duration::from_secs(15),
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("Frames received: 1"));
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    run(
+        Command::new(&installed)
+            .current_dir(work)
+            .args(["run", "--frames", "1", "game.spk"]),
+        Duration::from_secs(15),
+    );
     assert!(fs::read_dir(work.join("build")).unwrap().all(|entry| {
         !entry
             .unwrap()

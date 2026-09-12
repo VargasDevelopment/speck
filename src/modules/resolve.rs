@@ -139,7 +139,7 @@ fn qualify(module: &str, name: &str) -> String {
 
 fn is_builtin(name: &str) -> bool {
     builtins::FUNCTIONS.iter().any(|item| item.name == name)
-        || builtins::CONSTANTS.iter().any(|item| item.name == name)
+        || builtins::is_predefined_constant(name)
 }
 
 struct Resolver<'a> {

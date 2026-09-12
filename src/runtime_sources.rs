@@ -11,6 +11,19 @@ const FILES: &[(&str, &[u8])] = &[
         "crumb_internal.h",
         include_bytes!("../runtime/crumb/crumb_internal.h"),
     ),
+    ("audio.c", include_bytes!("../runtime/crumb/audio.c")),
+    (
+        "audio_internal.h",
+        include_bytes!("../runtime/crumb/audio_internal.h"),
+    ),
+    (
+        "audio_macos.c",
+        include_bytes!("../runtime/crumb/audio_macos.c"),
+    ),
+    (
+        "audio_null.c",
+        include_bytes!("../runtime/crumb/audio_null.c"),
+    ),
     ("input.c", include_bytes!("../runtime/crumb/input.c")),
     (
         "framebuffer.c",
