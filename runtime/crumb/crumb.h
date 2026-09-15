@@ -2,6 +2,7 @@
 #define CRUMB_H
 
 #include <stdbool.h>
+#include "storage.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,6 +30,12 @@ float crumb_frame_delta(void);
 float crumb_sin(float angle);
 void crumb_tone(float frequency, float seconds, float volume);
 void crumb_noise(float seconds, float volume);
+void crumb_sound_play(int sound, float volume);
+void crumb_sound_pause(void);
+void crumb_sound_resume(void);
+void crumb_sound_stop(void);
+float crumb_sound_position(void);
+void crumb_sound_seek(float seconds);
 void crumb_print_i32(int value);
 void crumb_debug_frame(int frame, float value);
 void crumb_source_location(const char *path, int line, int column);

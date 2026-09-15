@@ -72,6 +72,18 @@ impl CheckedProgram {
 pub fn analyze(source: &str) -> Result<CheckedProgram, Vec<Diagnostic>> {
     let tokens = lexer::lex(source)?;
     let ast = parser::parse(tokens)?;
+    if !ast.sounds.is_empty() {
+        return Err(ast
+            .sounds
+            .iter()
+            .map(|sound| {
+                Diagnostic::new(
+                    "sound assets require file-based analysis so their paths can be resolved",
+                    sound.span,
+                )
+            })
+            .collect());
+    }
     let mut sources = SourceMap::default();
     sources.add(PathBuf::from("<source>"), source.to_owned());
     CheckedProgram::validate(ast, sources).map_err(|error| error.diagnostics)

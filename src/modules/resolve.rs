@@ -28,6 +28,7 @@ pub(super) fn resolve(modules: &mut [Module]) -> Result<(), Vec<Diagnostic>> {
                 .structs
                 .iter()
                 .map(|item| (&item.name, item.span))
+                .chain(program.sounds.iter().map(|item| (&item.name, item.span)))
                 .chain(program.constants.iter().map(|item| (&item.name, item.span)))
                 .chain(program.globals.iter().map(|item| (&item.name, item.span)))
                 .chain(
@@ -89,6 +90,9 @@ pub(super) fn resolve(modules: &mut [Module]) -> Result<(), Vec<Diagnostic>> {
             for field in &mut declaration.fields {
                 resolver.ty(&mut field.ty, field.span);
             }
+        }
+        for sound in &mut program.sounds {
+            sound.name = namespaces[index].declarations[&sound.name].clone();
         }
         for constant in &mut program.constants {
             constant.name = namespaces[index].declarations[&constant.name].clone();

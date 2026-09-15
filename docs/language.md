@@ -496,7 +496,7 @@ introduced.
 The quoted game title is compile-time metadata, not a general-purpose string
 value. Strings are otherwise absent from the type system.
 
-## Procedural audio
+## Audio
 
 `tone(frequency: f32, seconds: f32, volume: f32)` plays a sine tone and
 `noise(seconds: f32, volume: f32)` plays a short noise burst. Both return `void`.
@@ -515,8 +515,7 @@ The runtime admits eight simultaneous effects and at most 32 pending commands.
 New effects are dropped when either capacity is full. Calls never wait for
 playback to finish. Audio-device initialization failure prints one warning and
 continues the game silently. Shutdown stops current sounds immediately, so a
-sound immediately followed by `quit()` may not be heard. There are no sound
-handles, looping, music files, or sample-loading APIs.
+sound immediately followed by `quit()` may not be heard.
 
 For example, a high tone can mark a match, a brief noise burst can mark a
 mismatch, and a lower, longer tone can mark an escape:
@@ -530,6 +529,42 @@ tone(220.0, 0.18, 0.5)
 Call the desired effect once when its event occurs; calling it every update
 starts overlapping effects. `examples/audio_feedback.spk` offers a native
 keyboard audition of these three effects.
+
+A top-level sound declaration embeds one backing track in the executable:
+
+```speck
+sound TRACK = "assets/track.wav"
+```
+
+The path must be relative to the file containing the declaration. Sound
+declarations in imported files resolve from that imported file and can be used
+through the import alias, such as `music::TRACK`. A declaration acts as an
+immutable `i32` handle; quoted paths remain declaration syntax and do not add a
+string value type.
+
+The compiler accepts RIFF/WAVE files containing uncompressed mono PCM16 at
+48,000 Hz. Encoded files are limited to 32 MiB and decoded audio to 180 seconds.
+It rejects missing, malformed, compressed, stereo, differently sampled, empty,
+or oversized assets at the declaration and includes asset files in `--watch`
+dependency tracking. Only PCM sample data is embedded, so the executable does
+not read the WAV or source tree at runtime.
+
+One backing track can play at a time:
+
+- `sound_play(sound: i32, volume: f32)` restarts that sound at the beginning.
+- `sound_pause()` pauses the track without affecting procedural effects.
+- `sound_resume()` resumes a paused track.
+- `sound_stop()` stops the track and resets its reported position to zero.
+- `sound_position() -> f32` reports playback position in seconds.
+- `sound_seek(seconds: f32)` moves within the active track.
+
+Playback and seek are asynchronous. `sound_play` ignores unknown handles,
+nonfinite volume, and nonpositive volume, and clamps volume above 1.0.
+`sound_seek` ignores nonfinite values and clamps finite values to the track's
+bounds. Tracks stop at the end; there is no automatic looping. Pause and stop
+cannot be lost when the bounded audio command queue is full. On PPM and browser
+development backends all track operations are silent no-ops and
+`sound_position()` returns `0.0`.
 
 ## Digital keyboard input and shutdown
 
@@ -622,3 +657,45 @@ The same limit applies to constant declarations, global initializers, and
 constants evaluated for array lengths. Exceeding it reports the constructor
 that would create the oversized value. Splitting a value across declarations
 or files does not bypass this limit. Array width is not aggregate depth.
+
+## Persistent integer slots
+
+Games can retain a small record across executions:
+
+```speck
+let best: i32 = 0
+start { best = load_i32(0, 0) }
+update(dt: f32) {
+    if key_pressed(KEY_S) {
+        if save_i32(0, best) { print_i32(best) }
+    }
+}
+```
+
+`load_i32(slot: i32, fallback: i32) -> i32` returns a stored value or the
+fallback when the slot is absent, malformed, or unavailable.
+`save_i32(slot: i32, value: i32) -> bool` atomically replaces one slot and
+reports success. Slots are `0` through `15`; out-of-range requests fail or use
+the fallback. All signed 32-bit values are supported. Calls are synchronous;
+save at a run boundary or deliberate user action rather than every frame.
+
+The exact UTF-8 `game` title selects the namespace, using a fixed hash so titles
+never become filesystem paths. The namespace is initialized before `start`.
+Moving the executable or source tree keeps the record; changing the title
+selects another namespace. Games with identical titles share it.
+
+- macOS: `~/Library/Application Support/Speck/game-<hash>/`
+- Linux: `$XDG_DATA_HOME/speck/game-<hash>/` when XDG_DATA_HOME is absolute,
+  otherwise `~/.local/share/speck/game-<hash>/`.
+- An absolute `SPECK_SAVE_DIR` overrides the base on either host; each game still
+  gets its own namespace below it. Relative overrides are rejected.
+
+Reading does not create directories. Saves create private directories/files
+and replace a single slot through a temporary file and rename. Concurrent
+writers to different slots preserve one another; the last rename wins for the
+same slot. A save is not a transaction across multiple slots. Missing home
+configuration, permissions, and invalid files never terminate the game.
+
+Storage runs on the game host for every presenter, including development
+previews; it is not browser localStorage. Tests should provide an isolated
+`SPECK_SAVE_DIR`. The language exposes no arbitrary-path runtime file API.

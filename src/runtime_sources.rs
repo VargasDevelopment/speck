@@ -26,6 +26,8 @@ const FILES: &[(&str, &[u8])] = &[
         include_bytes!("../runtime/crumb/audio_null.c"),
     ),
     ("input.c", include_bytes!("../runtime/crumb/input.c")),
+    ("storage.c", include_bytes!("../runtime/crumb/storage.c")),
+    ("storage.h", include_bytes!("../runtime/crumb/storage.h")),
     (
         "framebuffer.c",
         include_bytes!("../runtime/crumb/framebuffer.c"),

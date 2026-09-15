@@ -3,7 +3,7 @@ use std::mem::discriminant;
 
 use crate::ast::{
     ArrayLength, AssignOp, Block, Constant, Expr, Function, FunctionKind, Global, Param, Program,
-    ReturnType, Stmt, StmtKind, StructDecl, StructField, ValueType,
+    ReturnType, SoundAsset, Stmt, StmtKind, StructDecl, StructField, ValueType,
 };
 use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::{Token, TokenKind};
@@ -115,6 +115,7 @@ impl Parser {
             (String::new(), self.current().span, Resolution::DEFAULT)
         };
         let mut structs = Vec::new();
+        let mut sounds = Vec::new();
         let mut constants = Vec::new();
         let mut globals = Vec::new();
         let mut functions = Vec::new();
@@ -140,6 +141,8 @@ impl Parser {
                 self.parse_import()?;
             } else if self.at(&TokenKind::Struct) {
                 structs.push(self.parse_struct()?);
+            } else if self.at_sound_declaration() {
+                sounds.push(self.parse_sound()?);
             } else if self.at(&TokenKind::Const) {
                 constants.push(self.parse_constant()?);
             } else if self.at(&TokenKind::Let) {
@@ -154,7 +157,7 @@ impl Parser {
                 functions.push(self.parse_named_function()?);
             } else {
                 return Err(self.error_here(
-                    "expected a top-level `struct`, `const`, `let`, `fn`, `start`, `update`, or `draw` declaration",
+                    "expected a top-level `struct`, `sound`, `const`, `let`, `fn`, `start`, `update`, or `draw` declaration",
                 ));
             }
         }
@@ -164,10 +167,36 @@ impl Parser {
             title,
             title_span,
             structs,
+            sounds,
             constants,
             globals,
             functions,
         })
+    }
+
+    fn parse_sound(&mut self) -> Result<SoundAsset, Diagnostic> {
+        let start = self.advance().span;
+        let (name, _) = self.identifier("expected a sound name")?;
+        self.expect(&TokenKind::Equal, "expected `=` before sound asset path")?;
+        let path_token = self.advance();
+        let TokenKind::String(path) = path_token.kind else {
+            return Err(Diagnostic::new(
+                "expected a quoted WAV file path after `=`",
+                path_token.span,
+            ));
+        };
+        let end = self.optional_semicolon().unwrap_or(path_token.span);
+        Ok(SoundAsset {
+            name,
+            path,
+            handle: 0,
+            pcm: Vec::new(),
+            span: start.merge(end),
+        })
+    }
+
+    fn at_sound_declaration(&self) -> bool {
+        matches!(&self.current().kind, TokenKind::Identifier(name) if name == "sound")
     }
 
     fn at_resolution(&self) -> bool {

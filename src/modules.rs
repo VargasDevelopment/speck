@@ -4,7 +4,7 @@ mod resolve;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::ast::Program;
+use crate::ast::{Constant, Expr, ExprKind, Program, ValueType};
 use crate::diagnostic::{Diagnostic, Span};
 use crate::lexer::{self, Token};
 use crate::parser::{self, Import};
@@ -18,12 +18,14 @@ struct LoadedModule {
     height: usize,
     imports: Vec<(Import, usize)>,
     qualifier: String,
+    directory: PathBuf,
 }
 
 struct Module {
     program: Program,
     imports: Vec<(Import, usize)>,
     qualifier: String,
+    directory: PathBuf,
 }
 
 pub(crate) fn load(path: &Path) -> Result<(Program, SourceMap), AnalysisError> {
@@ -35,8 +37,7 @@ pub(crate) fn load(path: &Path) -> Result<(Program, SourceMap), AnalysisError> {
         root_dir: PathBuf::new(),
     };
     let result = loader.visit(path, None).and_then(|_| {
-        let files = loader
-            .modules
+        let files = std::mem::take(&mut loader.modules)
             .into_iter()
             .map(Option::unwrap)
             .collect::<Vec<_>>();
@@ -64,13 +65,62 @@ pub(crate) fn load(path: &Path) -> Result<(Program, SourceMap), AnalysisError> {
                     program,
                     imports: file.imports,
                     qualifier: file.qualifier,
+                    directory: file.directory,
                 })
             })
             .collect::<Result<Vec<_>, Vec<Diagnostic>>>()?;
         resolve::resolve(&mut modules)?;
+        let mut sound_names = modules
+            .iter()
+            .flat_map(|module| module.program.sounds.iter().map(|sound| sound.name.clone()))
+            .collect::<Vec<_>>();
+        sound_names.sort();
+        let handles = sound_names
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| (name, i32::try_from(index + 1).unwrap()))
+            .collect::<HashMap<_, _>>();
+        let mut sound_diagnostics = Vec::new();
+        for module in &mut modules {
+            for sound in &mut module.program.sounds {
+                sound.handle = handles[&sound.name];
+                let relative = Path::new(&sound.path);
+                if relative.is_absolute() {
+                    sound_diagnostics.push(Diagnostic::new(
+                        "sound asset paths must be relative to the declaring file",
+                        sound.span,
+                    ));
+                    continue;
+                }
+                let path = module.directory.join(relative);
+                match crate::audio_assets::load(&path, &mut loader.sources) {
+                    Ok(pcm) => sound.pcm = pcm,
+                    Err(message) => sound_diagnostics.push(Diagnostic::new(message, sound.span)),
+                }
+            }
+        }
+        if !sound_diagnostics.is_empty() {
+            return Err(sound_diagnostics);
+        }
+        for module in &mut modules {
+            module
+                .program
+                .constants
+                .extend(module.program.sounds.iter().map(|sound| Constant {
+                    name: sound.name.clone(),
+                    ty: ValueType::I32,
+                    init: Expr {
+                        kind: ExprKind::I32(i64::from(sound.handle)),
+                        span: sound.span,
+                    },
+                    value: None,
+                    span: sound.span,
+                }));
+        }
         let mut root = modules.remove(0).program;
         for module in modules {
             root.structs.extend(module.program.structs);
+            root.sounds.extend(module.program.sounds);
             root.constants.extend(module.program.constants);
             root.globals.extend(module.program.globals);
             root.functions.extend(module.program.functions);
@@ -189,6 +239,7 @@ impl Loader {
             height,
             imports,
             qualifier,
+            directory: canonical.parent().unwrap().to_owned(),
         });
         self.active.pop();
         Ok(index)

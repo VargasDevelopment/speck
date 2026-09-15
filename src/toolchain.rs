@@ -544,7 +544,13 @@ fn compile_runtime(
 ) -> Result<Vec<PathBuf>, String> {
     let runtime_sources = crate::runtime_sources::RuntimeSources::materialize(build_dir)?;
     let crumb_dir = &runtime_sources.directory;
-    let common_sources = ["crumb.c", "input.c", "framebuffer.c", presenter.source()];
+    let common_sources = [
+        "crumb.c",
+        "input.c",
+        "storage.c",
+        "framebuffer.c",
+        presenter.source(),
+    ];
     let sources = common_sources
         .into_iter()
         .chain(presenter.audio_sources().iter().copied())
