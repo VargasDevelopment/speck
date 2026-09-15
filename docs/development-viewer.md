@@ -113,9 +113,11 @@ presentation after `spk_draw`, and presenter shutdown.
   links the Cocoa presenter. It runs without a frame limit by default; the CLI's
   `--frames` option supplies a bounded test override.
 
-Procedural `tone` and `noise` effects play only in native macOS `speck run`.
-PPM builds and browser development accept these calls silently and do not open
-an audio device on the game host. Browser audio transport is not implemented.
+Procedural effects and embedded `sound` tracks play only in native macOS
+`speck run`. PPM builds and browser development accept the same calls silently,
+return zero for `sound_position()`, and do not open an audio device on the game
+host. WAV files still participate in `--watch`; browser audio transport is not
+implemented.
 
 Neither selection changes the Speck source, framebuffer drawing operations, or
 portable input semantics. The transport environment variables are a private

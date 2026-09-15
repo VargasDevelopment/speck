@@ -20,6 +20,7 @@ fn portable_audio_is_bounded_deterministic_and_thread_safe() {
                 "-Wextra",
                 "-Wpedantic",
                 "-Werror",
+                "-DCRUMB_AUDIO_TEST_HOOKS",
                 "-Iruntime/crumb",
                 "tests/crumb_audio.c",
                 "runtime/crumb/audio.c",

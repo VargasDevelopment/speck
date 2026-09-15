@@ -1,8 +1,27 @@
 ; Speck game: Crumb Bum
 source_filename = "speck"
 
+@spk_storage_identity_data = private unnamed_addr constant [10 x i8] c"Crumb Bum\00", align 1
+
+declare void @crumb_storage_init(ptr, i64)
+
+define i32 @spk_sound_lookup(i32 %handle, ptr %data, ptr %sample_count) {
+entry:
+  store ptr null, ptr %data
+  store i32 0, ptr %sample_count
+  ret i32 0
+}
+
+declare i32 @crumb_load_i32(i32, i32)
+declare i1 @crumb_save_i32(i32, i32)
 declare void @crumb_tone(float, float, float)
 declare void @crumb_noise(float, float)
+declare void @crumb_sound_play(i32, float)
+declare void @crumb_sound_pause()
+declare void @crumb_sound_resume()
+declare void @crumb_sound_stop()
+declare float @crumb_sound_position()
+declare void @crumb_sound_seek(float)
 declare float @crumb_sin(float)
 declare void @crumb_print_i32(i32)
 declare void @crumb_debug_frame(i32, float)
@@ -40,6 +59,7 @@ entry:
 define void @spk_start() {
 entry:
   %t0 = alloca i32
+  call void @crumb_storage_init(ptr @spk_storage_identity_data, i64 9)
   call void @crumb_print_i32(i32 1440)
   store i32 2, ptr %t0
   br label %while_condition_0

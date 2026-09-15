@@ -20,6 +20,13 @@ static int fail_at;
 static int operation;
 static int live;
 
+int spk_sound_lookup(int handle, const int16_t **data, unsigned int *sample_count) {
+    (void)handle;
+    (void)data;
+    (void)sample_count;
+    return 0;
+}
+
 static OSStatus step(void) {
     return ++operation == fail_at ? -1 : noErr;
 }

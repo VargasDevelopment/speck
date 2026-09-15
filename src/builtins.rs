@@ -15,6 +15,18 @@ pub struct PredefinedConstant {
 
 pub const FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction {
+        name: "load_i32",
+        params: &[ValueType::I32, ValueType::I32],
+        return_type: ReturnType::Value(ValueType::I32),
+        llvm_symbol: "@crumb_load_i32",
+    },
+    BuiltinFunction {
+        name: "save_i32",
+        params: &[ValueType::I32, ValueType::I32],
+        return_type: ReturnType::Value(ValueType::Bool),
+        llvm_symbol: "@crumb_save_i32",
+    },
+    BuiltinFunction {
         name: "tone",
         params: &[ValueType::F32, ValueType::F32, ValueType::F32],
         return_type: ReturnType::Void,
@@ -25,6 +37,42 @@ pub const FUNCTIONS: &[BuiltinFunction] = &[
         params: &[ValueType::F32, ValueType::F32],
         return_type: ReturnType::Void,
         llvm_symbol: "@crumb_noise",
+    },
+    BuiltinFunction {
+        name: "sound_play",
+        params: &[ValueType::I32, ValueType::F32],
+        return_type: ReturnType::Void,
+        llvm_symbol: "@crumb_sound_play",
+    },
+    BuiltinFunction {
+        name: "sound_pause",
+        params: &[],
+        return_type: ReturnType::Void,
+        llvm_symbol: "@crumb_sound_pause",
+    },
+    BuiltinFunction {
+        name: "sound_resume",
+        params: &[],
+        return_type: ReturnType::Void,
+        llvm_symbol: "@crumb_sound_resume",
+    },
+    BuiltinFunction {
+        name: "sound_stop",
+        params: &[],
+        return_type: ReturnType::Void,
+        llvm_symbol: "@crumb_sound_stop",
+    },
+    BuiltinFunction {
+        name: "sound_position",
+        params: &[],
+        return_type: ReturnType::Value(ValueType::F32),
+        llvm_symbol: "@crumb_sound_position",
+    },
+    BuiltinFunction {
+        name: "sound_seek",
+        params: &[ValueType::F32],
+        return_type: ReturnType::Void,
+        llvm_symbol: "@crumb_sound_seek",
     },
     BuiltinFunction {
         name: "sin",
