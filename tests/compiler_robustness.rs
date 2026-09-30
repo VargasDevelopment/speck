@@ -302,9 +302,13 @@ fn every_seed_truncation_reports_safely() {
 }
 
 // Ignore comments and insignificant line whitespace, preserving quoted IR
-// strings (including semicolons) and all instructions, operands, and globals.
+// strings (including semicolons) and all instructions, operands, and globals
+// except title metadata and its storage initialization (retitling a program
+// does not count as new executable mutation coverage).
 fn ir_fingerprint(ir: &str) -> String {
     ir.lines()
+        .filter(|line| !line.starts_with("@spk_storage_identity_data ="))
+        .filter(|line| !line.contains("call void @crumb_storage_init("))
         .map(|line| {
             let mut quoted = false;
             let comment = line.char_indices().find_map(|(index, character)| {

@@ -218,7 +218,7 @@ impl<'a> Lexer<'a> {
         while self.cursor < self.bytes.len() && self.bytes[self.cursor] != b'"' {
             if self.bytes[self.cursor] == b'\n' {
                 self.diagnostics.push(Diagnostic::new(
-                    "unterminated game title",
+                    "unterminated string literal",
                     Span::new(start, self.cursor),
                 ));
                 return;
@@ -227,7 +227,7 @@ impl<'a> Lexer<'a> {
         }
         if self.cursor == self.bytes.len() {
             self.diagnostics.push(Diagnostic::new(
-                "unterminated game title",
+                "unterminated string literal",
                 Span::new(start, self.cursor),
             ));
             return;

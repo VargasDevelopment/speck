@@ -22,6 +22,9 @@
       "include": "#primitive-types"
     },
     {
+      "include": "#sound-declaration"
+    },
+    {
       "include": "#keywords"
     },
     {
@@ -234,6 +237,10 @@
       "match": "(?<![A-Za-z0-9_])(?:i32|f32|bool|void)(?![A-Za-z0-9_])",
       "name": "storage.type.speck"
     },
+    "sound-declaration": {
+      "match": "(?<![A-Za-z0-9_])sound(?=\\s+[A-Za-z_][A-Za-z0-9_]*\\s*=)",
+      "name": "keyword.control.speck"
+    },
     "keywords": {
       "match": "(?<![A-Za-z0-9_])(?:game|start|update|draw|fn|struct|let|const|return|if|else|while|for|in|import|as)(?![A-Za-z0-9_])",
       "name": "keyword.control.speck"
@@ -243,7 +250,7 @@
       "name": "constant.language.boolean.speck"
     },
     "builtins": {
-      "match": "(?<![A-Za-z0-9_])(?:tone|noise|sin|print_i32|debug_frame|clear_rgb|fill_rect|key_down|key_pressed|key_released|quit)(?![A-Za-z0-9_])(?=\\s*\\()",
+      "match": "(?<![A-Za-z0-9_])(?:load_i32|save_i32|tone|noise|sound_play|sound_pause|sound_resume|sound_stop|sound_position|sound_seek|sin|print_i32|debug_frame|clear_rgb|fill_rect|key_down|key_pressed|key_released|quit)(?![A-Za-z0-9_])(?=\\s*\\()",
       "name": "support.function.speck"
     },
     "constants": {

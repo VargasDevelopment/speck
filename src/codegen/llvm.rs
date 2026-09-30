@@ -144,6 +144,7 @@ fn emit_program(
             .expect("writing to a string cannot fail");
     }
     output.push('\n');
+    super::embedded_data::emit(&mut output, program);
     for builtin in builtins::FUNCTIONS {
         let params = builtin
             .params
@@ -231,7 +232,7 @@ fn emit_program(
             &functions,
             diagnostics,
         );
-        output.push_str(&emitter.emit());
+        output.push_str(&emitter.emit(program.title.len()));
         output.push('\n');
     }
     if output.ends_with("\n\n") {
@@ -313,7 +314,7 @@ impl<'a> FunctionEmitter<'a> {
         }
     }
 
-    fn emit(mut self) -> String {
+    fn emit(mut self, title_length: usize) -> String {
         let params = self
             .function
             .params
@@ -334,6 +335,12 @@ impl<'a> FunctionEmitter<'a> {
             llvm_return_type(&self.function.return_type)
         ));
         self.lines.push("entry:".into());
+
+        if self.function.kind == FunctionKind::Start {
+            self.instruction(format!(
+                "call void @crumb_storage_init(ptr @spk_storage_identity_data, i64 {title_length})"
+            ));
+        }
 
         for (index, param) in self.function.params.iter().enumerate() {
             let pointer = self.temp();

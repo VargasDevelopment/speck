@@ -12,6 +12,23 @@
 
 static int16_t samples[CRUMB_AUDIO_SAMPLE_RATE * 2 + 1];
 static int16_t reference[CRUMB_AUDIO_SAMPLE_RATE * 2 + 1];
+static const int16_t track[] = {32767, -32768, 16384, -16384, 8192, -8192, 1, -1};
+static atomic_int hold_sound_publish;
+static atomic_int sound_publish_waiting;
+
+void crumb_audio_test_before_sound_play_publish(void) {
+    if (atomic_load_explicit(&hold_sound_publish, memory_order_acquire)) {
+        atomic_store_explicit(&sound_publish_waiting, 1, memory_order_release);
+        while (atomic_load_explicit(&hold_sound_publish, memory_order_acquire)) {}
+    }
+}
+
+int spk_sound_lookup(int handle, const int16_t **data, unsigned int *sample_count) {
+    if (handle != 1) return 0;
+    *data = track;
+    *sample_count = sizeof track / sizeof *track;
+    return 1;
+}
 
 static void reset(void) {
     crumb_audio_reset();
@@ -133,11 +150,91 @@ static void concurrent_submission(void) {
     assert_silent(256);
 }
 
+static int16_t track_sample(unsigned int index, float volume) {
+    return (int16_t)(((float)track[index] / 32768.0f) * volume * 32767.0f);
+}
+
+static void pcm_track_transport_and_saturation(void) {
+    reset();
+    crumb_sound_play(1, 1.0f);
+    crumb_audio_render(samples, 2);
+    assert(samples[0] == track_sample(0, 1.0f));
+    assert(samples[1] == track_sample(1, 1.0f));
+    assert(fabsf(crumb_sound_position() - 2.0f / CRUMB_AUDIO_SAMPLE_RATE) < 0.000001f);
+
+    crumb_sound_pause();
+    assert_silent(3);
+    assert(fabsf(crumb_sound_position() - 2.0f / CRUMB_AUDIO_SAMPLE_RATE) < 0.000001f);
+    crumb_sound_resume();
+    crumb_audio_render(samples, 2);
+    assert(samples[0] == track_sample(2, 1.0f));
+    assert(samples[1] == track_sample(3, 1.0f));
+
+    crumb_sound_play(1, 0.5f);
+    crumb_audio_render(samples, 1);
+    assert(samples[0] == track_sample(0, 0.5f));
+    crumb_sound_seek(5.0f / CRUMB_AUDIO_SAMPLE_RATE);
+    crumb_audio_render(samples, 1);
+    assert(samples[0] == track_sample(5, 0.5f));
+    crumb_sound_seek(-INFINITY);
+    crumb_audio_render(samples, 1);
+    assert(samples[0] == track_sample(6, 0.5f));
+
+    reset();
+    crumb_sound_play(1, 1.0f);
+    for (int i = 0; i < 1000; ++i) crumb_sound_seek(0.0f);
+    crumb_sound_stop();
+    assert_silent(16);
+    assert(crumb_sound_position() == 0.0f);
+
+    reset();
+    crumb_sound_play(1, 1.0f);
+    crumb_audio_render(samples, 1);
+    for (int i = 0; i < 1000; ++i) crumb_sound_seek(0.0f);
+    crumb_sound_pause();
+    assert_silent(16);
+    crumb_sound_resume();
+    crumb_audio_render(samples, 1);
+    assert(samples[0] == track_sample(0, 1.0f));
+
+    crumb_sound_stop();
+    crumb_sound_play(99, 1.0f);
+    crumb_sound_play(1, NAN);
+    assert_silent(8);
+}
+
+static void *play_while_publish_is_held(void *unused) {
+    (void)unused;
+    crumb_sound_play(1, 1.0f);
+    return NULL;
+}
+
+static void play_state_precedes_command_publication(void) {
+    pthread_t producer;
+
+    reset();
+    atomic_store(&sound_publish_waiting, 0);
+    atomic_store(&hold_sound_publish, 1);
+    assert(pthread_create(&producer, NULL, play_while_publish_is_held, NULL) == 0);
+    while (!atomic_load_explicit(&sound_publish_waiting, memory_order_acquire)) {}
+
+    /* The play state is ready, but the callback cannot consume the unpublished slot. */
+    assert_silent(4);
+    atomic_store_explicit(&hold_sound_publish, 0, memory_order_release);
+    assert(pthread_join(producer, NULL) == 0);
+
+    crumb_audio_render(samples, 2);
+    assert(samples[0] == track_sample(0, 1.0f));
+    assert(samples[1] == track_sample(1, 1.0f));
+}
+
 int main(void) {
     tone_duration_frequency_and_envelope();
     validation_and_clamps();
     deterministic_noise_and_chunk_boundaries();
     bounded_overload_and_reset();
     concurrent_submission();
+    pcm_track_transport_and_saturation();
+    play_state_precedes_command_publication();
     return 0;
 }

@@ -56,7 +56,7 @@ The next roadmap phase is explicitly deferred for discussion before work starts:
 - Select another native platform only from actual player needs.
 
 Cross-compilation, package-management infrastructure, a language server,
-completion, broader graphics, and audio beyond native procedural effects remain
+completion, broader graphics, and broader audio formats and mixing remain
 proposals requiring concrete use cases. This is an outcome roadmap, not a promised feature list or schedule.
 
 The [language reference](language.md) owns implemented behavior, the

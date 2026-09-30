@@ -1,4 +1,5 @@
 pub mod ast;
+mod audio_assets;
 mod builtins;
 mod checked;
 pub mod cli;

@@ -225,6 +225,46 @@ fn palette(red: i32) -> String {
     format!("fn red() -> i32 {{ return {red} }}\n")
 }
 
+fn wav(samples: &[i16]) -> Vec<u8> {
+    let data_length = u32::try_from(samples.len() * 2).unwrap();
+    let mut bytes = Vec::with_capacity(44 + samples.len() * 2);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_length).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&48_000u32.to_le_bytes());
+    bytes.extend_from_slice(&96_000u32.to_le_bytes());
+    bytes.extend_from_slice(&2u16.to_le_bytes());
+    bytes.extend_from_slice(&16u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_length.to_le_bytes());
+    for sample in samples {
+        bytes.extend_from_slice(&sample.to_le_bytes());
+    }
+    bytes
+}
+
+#[test]
+fn same_length_sound_asset_edits_restart_the_game() {
+    let directory = support::workspace();
+    fs::write(
+        directory.path().join("game.spk"),
+        "game \"Asset watch\"\nsound TRACK = \"track.wav\"\nstart {}\nupdate(dt: f32) {}\ndraw { clear_rgb(17, 0, 0) }\n",
+    )
+    .unwrap();
+    fs::write(directory.path().join("track.wav"), wav(&[100, -100])).unwrap();
+    let mut watch = Watcher::start(directory, None, None);
+    let first = watch.color(17, 0);
+    let first_pid = watch.game_pid();
+
+    fs::write(watch.work().join("track.wav"), wav(&[200, -200])).unwrap();
+    watch.until(|this| this.frame(first.sequence()).generation() > first.generation());
+    assert!(!alive(first_pid));
+    watch.stop();
+}
+
 #[test]
 fn dependency_edits_errors_and_missing_files_recover_at_the_same_viewer() {
     let directory = support::workspace();

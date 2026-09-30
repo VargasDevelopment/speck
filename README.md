@@ -142,6 +142,14 @@ HTTP, TCP, and presenter events remain below the Speck/CRuMB boundary.
 `tone(frequency, seconds, volume)` and `noise(seconds, volume)` provide short
 procedural effects in native macOS runs. PPM and browser development stay
 silent. Try `speck run examples/audio_feedback.spk` and press W, A, or D.
+Bounded `sound TRACK = "track.wav"` declarations embed mono 48 kHz PCM16 WAV
+tracks for native playback, including pause, resume, stop, position, and seek.
+Asset paths are relative to their declaring file and participate in `--watch`.
+
+`load_i32(slot, fallback)` and `save_i32(slot, value)` provide 16 persistent
+integer slots per game title. Writes replace individual records atomically;
+missing or unavailable storage uses the supplied fallback instead of failing
+the game. See [the storage contract](docs/language.md#persistent-integer-slots).
 
 A lightweight [VS Code / Cursor extension](editors/vscode/README.md) adds
 syntax highlighting and basic editing for `.spk` files.
@@ -150,7 +158,7 @@ syntax highlighting and basic editing for `.spk` files.
 
 This is an honest small compiler/runtime slice, not a general-purpose language
 or a finished tiny-game platform. There is no heap, garbage collector,
-dynamic arrays, slices, or asset system. Relative file imports provide modules
+dynamic arrays, slices, or a general sprite/asset pipeline. Relative file imports provide modules
 with qualified names; there is no package manager. Fixed-size explicitly typed
 arrays use native value storage and checked `i32` indexing. Named structs are
 fixed-layout values with no object runtime; the two aggregate forms compose

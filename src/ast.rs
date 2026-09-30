@@ -142,9 +142,19 @@ pub struct Program {
     pub title: String,
     pub title_span: Span,
     pub structs: Vec<StructDecl>,
+    pub sounds: Vec<SoundAsset>,
     pub constants: Vec<Constant>,
     pub globals: Vec<Global>,
     pub functions: Vec<Function>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SoundAsset {
+    pub name: String,
+    pub path: String,
+    pub handle: i32,
+    pub pcm: Vec<u8>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq)]

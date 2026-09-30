@@ -278,7 +278,7 @@ by more than one interval is reset rather than causing an extended catch-up
 burst. The Speck-visible `dt` remains the provisional fixed `1/60`; it is
 simulation time, not a measurement of wall-clock work or display refresh.
 
-## Native procedural audio
+## Native audio
 
 The public `crumb_tone` and `crumb_noise` functions lower from table-defined
 Speck builtins. Cocoa builds compile `audio.c` and `audio_macos.c`, linking the
@@ -294,6 +294,22 @@ Sine tones and deterministic pseudo-random noise use a short attack and decay;
 mixing reserves per-voice headroom and clamps the final sum. Rendering performs
 no allocation, locking, logging, or calls into Speck. Tests exercise synthesis
 without audio hardware, including concurrent submission and numerical extremes.
+
+Top-level `sound NAME = "path.wav"` declarations are resolved relative to their
+declaring module. The loader validates a 32 MiB/180 second subset of RIFF/WAVE
+(48 kHz, mono, PCM16), records both the requested path and canonical symlink
+target as dependencies, and assigns handles by sorted resolved declaration name.
+It retains only PCM bytes. LLVM emission stores those bytes in aligned private
+globals and generates `spk_sound_lookup`, so the runtime executable has no asset
+file I/O or dependency on the source tree.
+
+`audio.c` owns a second fixed single-producer/single-consumer queue for play and
+seek commands. The callback alone owns the active backing-track pointer, length,
+volume, and sample position. Pause and stop use lock-free atomic state outside
+that bounded queue; a stop epoch invalidates already queued transport commands.
+The callback mixes one PCM track with procedural voices and publishes its sample
+position atomically. It performs no allocation, file I/O, locking, or logging.
+The null backend implements silent no-ops and reports position zero.
 
 `audio_macos.c` opens one AudioQueue with three 256-sample buffers. Audio starts
 before `spk_start`; an initialization failure cleans up and prints one warning
@@ -365,3 +381,10 @@ tool. They do not appear in a generated normal game executable.
   integer overflow and division-by-zero behavior remain provisional.
 - The backend emits straightforward stack-based IR and relies on Clang's LLVM
   optimizer; it is inspectable rather than size-optimal.
+
+Persistent integer storage lives in `runtime/crumb/storage.c`. Generated
+`spk_start` initializes its namespace from a private UTF-8 game-title constant
+before user code. The language registry owns the two typed save/load calls;
+normal runtime materialization bundles the implementation and header. Storage
+is synchronous on the game thread, uses separate versioned slot files, and
+replaces one slot atomically. The audio callback never touches storage.

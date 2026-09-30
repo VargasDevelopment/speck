@@ -143,6 +143,15 @@ test('module keywords and qualified paths in types, array sizes and calls', () =
     has(tokens[2], 'Room', 'entity.name.type.speck');
 });
 
+test('sound declarations and builtins highlight without reserving sound identifiers', () => {
+    const declaration = line('sound TRACK = "assets/track.wav"');
+    has(declaration, 'sound', 'keyword.control.speck');
+    has(declaration, 'TRACK', 'variable.other.speck');
+    has(declaration, 'assets/track.wav', 'string.quoted.double.speck');
+    has(line('sound_play(TRACK, 0.5)'), 'sound_play', 'support.function.speck');
+    has(line('import "sound.spk" as sound'), 'sound', 'variable.other.speck');
+});
+
 test('representative BOOTS source retains useful scopes through nested aggregate data', () => {
     const source = fs.readFileSync(path.join(__dirname, 'fixtures/boots.spk'), 'utf8');
     const tokens = tokenize(source).flat();
