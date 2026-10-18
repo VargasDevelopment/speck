@@ -11,6 +11,10 @@ use super::protocol::{self, BrowserInput, ControlMessage, Frame};
 const VIEWER_HTML: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/viewer.html"));
 const INPUT_LEASE_TIMEOUT: Duration = Duration::from_secs(1);
 const HTTP_HEADER_MAX_BYTES: usize = 8192;
+/// How often a silent frame read rechecks whether its game has been reaped.
+const FRAME_SILENCE_POLL: Duration = Duration::from_millis(100);
+/// How long a reaped game's connection may stay silent; see `GameStream`.
+const REAPED_GAME_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Default)]
 pub struct FrameStore {
@@ -377,94 +381,117 @@ pub fn bind_frame_listener() -> Result<TcpListener, String> {
     Ok(listener)
 }
 
+/// Receive one game's frames until its stream ends. Only the game's reaper may set `reaped`.
 pub fn spawn_frame_receiver(
     listener: TcpListener,
     frames: FrameStore,
     controls: InputControl,
-    shutdown: Arc<AtomicBool>,
+    reaped: Arc<AtomicBool>,
     fatal: Sender<String>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let mut stream = loop {
-            // Observe shutdown before accept: if the child exits during this
-            // attempt, retry once with that knowledge before declaring it empty.
-            let stopping = shutdown.load(Ordering::Acquire);
-            match listener.accept() {
-                Ok((stream, _)) => break stream,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    // A short game can exit before this thread first accepts.
-                    // Drain its queued connection before honoring shutdown.
-                    if stopping {
-                        frames.stop();
-                        return;
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) => {
-                    let message = format!("frame receiver failed before game connected: {error}");
-                    let _ = fatal.send(message);
-                    shutdown.store(true, Ordering::Release);
-                    frames.stop();
-                    return;
-                }
-            }
-        };
-
-        if let Err(error) = stream.set_nonblocking(false) {
-            let _ = fatal.send(format!(
-                "could not configure frame stream blocking mode: {error}"
-            ));
-            shutdown.store(true, Ordering::Release);
-            frames.stop();
-            return;
-        }
-        if let Err(error) = stream.set_read_timeout(Some(Duration::from_secs(2))) {
-            let _ = fatal.send(format!("could not configure frame stream timeout: {error}"));
-            shutdown.store(true, Ordering::Release);
-            frames.stop();
-            return;
-        }
-        let control_stream = match stream.try_clone() {
-            Ok(stream) => stream,
-            Err(error) => {
-                let _ = fatal.send(format!("could not clone game stream for input: {error}"));
-                shutdown.store(true, Ordering::Release);
-                frames.stop();
-                return;
-            }
-        };
-        if let Err(error) = controls.connect_game(control_stream, frames.generation()) {
+        if let Err(error) = receive_frames(&listener, &frames, &controls, reaped) {
             let _ = fatal.send(error);
-            shutdown.store(true, Ordering::Release);
-            frames.stop();
-            return;
-        }
-        let mut last_sequence = 0;
-        loop {
-            match protocol::read_frame(&mut stream) {
-                Ok(Some(frame)) if frame.sequence > last_sequence => {
-                    last_sequence = frame.sequence;
-                    frames.publish(frame);
-                }
-                Ok(Some(frame)) => {
-                    let _ = fatal.send(format!(
-                        "invalid native frame sequence {}; previous frame was {last_sequence}",
-                        frame.sequence
-                    ));
-                    shutdown.store(true, Ordering::Release);
-                    break;
-                }
-                Ok(None) => break,
-                Err(error) => {
-                    let _ = fatal.send(format!("invalid native frame stream: {error}"));
-                    shutdown.store(true, Ordering::Release);
-                    break;
-                }
-            }
         }
         controls.disconnect_game();
         frames.stop();
     })
+}
+
+fn receive_frames(
+    listener: &TcpListener,
+    frames: &FrameStore,
+    controls: &InputControl,
+    reaped: Arc<AtomicBool>,
+) -> Result<(), String> {
+    let stream = loop {
+        // Observe reaping before accept: if the child exits during this
+        // attempt, retry once with that knowledge before declaring it empty.
+        let was_reaped = reaped.load(Ordering::Acquire);
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            // A short game can exit before this thread first accepts.
+            // Drain its queued connection before honoring its exit.
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock && was_reaped => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "frame receiver failed before game connected: {error}"
+                ));
+            }
+        }
+    };
+    stream
+        .set_nonblocking(false)
+        .map_err(|error| format!("could not configure frame stream blocking mode: {error}"))?;
+    stream
+        .set_read_timeout(Some(FRAME_SILENCE_POLL))
+        .map_err(|error| format!("could not configure frame stream polling: {error}"))?;
+    let control_stream = stream
+        .try_clone()
+        .map_err(|error| format!("could not clone game stream for input: {error}"))?;
+    controls.connect_game(control_stream, frames.generation())?;
+
+    let mut stream = GameStream {
+        stream,
+        reaped,
+        silent_since_reap: None,
+    };
+    let mut last_sequence = 0;
+    while let Some(frame) = protocol::read_frame(&mut stream)
+        .map_err(|error| format!("invalid native frame stream: {error}"))?
+    {
+        if frame.sequence <= last_sequence {
+            return Err(format!(
+                "invalid native frame sequence {}; previous frame was {last_sequence}",
+                frame.sequence
+            ));
+        }
+        last_sequence = frame.sequence;
+        frames.publish(frame);
+    }
+    Ok(())
+}
+
+/// A suspended, debugged, or CPU-starved game may be silent between or within frames, so
+/// silence is never an error while it lives. The session sets `reaped` only after the game
+/// exited and was waited on; its buffered bytes and EOF are then already in flight, so a
+/// connection still silent after a short grace is not the game's.
+struct GameStream {
+    stream: TcpStream,
+    reaped: Arc<AtomicBool>,
+    silent_since_reap: Option<Instant>,
+}
+
+impl Read for GameStream {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            // Observe reaping before the read, so a silent result after it is post-mortem.
+            let reaped = self.reaped.load(Ordering::Acquire);
+            match self.stream.read(buffer) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    if !reaped {
+                        continue;
+                    }
+                    let since = *self.silent_since_reap.get_or_insert_with(Instant::now);
+                    if since.elapsed() >= REAPED_GAME_GRACE {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "frame connection stayed open after the development game exited",
+                        ));
+                    }
+                }
+                result => return result,
+            }
+        }
+    }
 }
 
 fn handle_http(
