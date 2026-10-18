@@ -51,6 +51,12 @@ or a game crash stops the server; a nonzero game status is reported. Debug
 output continues to use the game's stdout/stderr and never shares the binary
 frame/control channel.
 
+A running game has no frame-arrival deadline: while it is paused in a debugger,
+suspended, or starved of CPU, the viewer keeps its latest frame and resumes when
+frames do. Ending the game process ends its stream; a partial final frame is
+reported as truncated. After the game exits, a frame connection that stays open
+is abandoned with an error after about two seconds.
+
 ## Rebuild on save
 
 ```sh

@@ -116,14 +116,14 @@ impl Session {
                 executable.display()
             )
         })?;
-        let stop = Arc::new(AtomicBool::new(false));
+        let reaped = Arc::new(AtomicBool::new(false));
         let (errors, fatal) = mpsc::channel();
         self.frames.begin_run();
         let receiver = server::spawn_frame_receiver(
             listener,
             self.frames.clone(),
             self.controls.clone(),
-            stop.clone(),
+            reaped.clone(),
             errors,
         );
         println!(
@@ -133,7 +133,7 @@ impl Session {
         );
         self.game = Some(GameRun {
             child,
-            stop,
+            reaped,
             receiver: Some(receiver),
             fatal,
         });
@@ -193,7 +193,7 @@ impl Session {
                 thread::sleep(Duration::from_millis(20));
             }
         }
-        game.stop.store(true, Ordering::Release);
+        game.reaped.store(true, Ordering::Release);
         game.receiver
             .take()
             .unwrap()
@@ -220,7 +220,7 @@ impl Drop for Session {
 
 struct GameRun {
     child: Child,
-    stop: Arc<AtomicBool>,
+    reaped: Arc<AtomicBool>,
     receiver: Option<JoinHandle<()>>,
     fatal: mpsc::Receiver<String>,
 }
@@ -228,7 +228,7 @@ struct GameRun {
 impl Drop for GameRun {
     fn drop(&mut self) {
         super::terminate(&mut self.child);
-        self.stop.store(true, Ordering::Release);
+        self.reaped.store(true, Ordering::Release);
         if let Some(receiver) = self.receiver.take() {
             let _ = receiver.join();
         }
